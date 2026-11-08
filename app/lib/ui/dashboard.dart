@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../config.dart';
@@ -10,9 +11,10 @@ import 'manage_dialogs.dart';
 import 'room_card.dart';
 
 class Dashboard extends StatefulWidget {
-  const Dashboard({super.key, required this.controller});
+  const Dashboard({super.key, required this.controller, this.user});
 
   final HomeController controller;
+  final User? user;
 
   @override
   State<Dashboard> createState() => _DashboardState();
@@ -47,7 +49,7 @@ class _DashboardState extends State<Dashboard> {
         child: ListenableBuilder(
           listenable: c,
           builder: (context, _) {
-            if (!c.loaded) return _Connecting(online: c.online);
+            if (!c.loaded) return _Connecting(online: c.online, user: widget.user);
             return LayoutBuilder(
               builder: (context, box) {
                 final wide = box.maxWidth >= 1000;
@@ -93,7 +95,7 @@ class _DashboardState extends State<Dashboard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _Header(controller: c),
+        _Header(controller: c, user: widget.user),
         const SizedBox(height: 28),
         _SectionTitle(room.name),
         GridView(
@@ -133,9 +135,16 @@ class _DashboardState extends State<Dashboard> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.controller});
+  const _Header({required this.controller, this.user});
 
   final HomeController controller;
+  final User? user;
+
+  String get _firstName {
+    final display = user?.displayName?.trim() ?? '';
+    if (display.isNotEmpty) return display.split(' ').first;
+    return residentName;
+  }
 
   String _greeting() {
     final hour = (controller.time ?? DateTime.now()).hour;
@@ -146,7 +155,8 @@ class _Header extends StatelessWidget {
             : hour < 18
                 ? 'Good afternoon'
                 : 'Good evening';
-    return residentName.isEmpty ? '$part.' : '$part, $residentName.';
+    final name = _firstName;
+    return name.isEmpty ? '$part.' : '$part, $name.';
   }
 
   @override
@@ -200,7 +210,63 @@ class _Header extends StatelessWidget {
             ),
           ),
         ),
+        if (user != null) ...[
+          const SizedBox(width: 10),
+          _AccountButton(user: user!),
+        ],
       ],
+    );
+  }
+}
+
+/// Avatar with the signed-in account and a sign-out option.
+class _AccountButton extends StatelessWidget {
+  const _AccountButton({required this.user});
+  final User user;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = (user.displayName?.trim().isNotEmpty ?? false) ? user.displayName! : (user.email ?? 'Account');
+    return PopupMenuButton<String>(
+      tooltip: 'Account',
+      color: NestraColors.cardRaised,
+      position: PopupMenuPosition.under,
+      onSelected: (value) {
+        if (value == 'sign_out') FirebaseAuth.instance.signOut();
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: NestraColors.textPrimary, fontWeight: FontWeight.w600)),
+              if (user.email != null && user.email != label)
+                Text(user.email!, style: const TextStyle(color: NestraColors.textSecondary, fontSize: 12)),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'sign_out',
+          child: Row(
+            children: [
+              Icon(Icons.logout_rounded, size: 18),
+              SizedBox(width: 10),
+              Text('Sign out'),
+            ],
+          ),
+        ),
+      ],
+      child: CircleAvatar(
+        radius: 24,
+        backgroundColor: NestraColors.cardRaised,
+        foregroundImage: user.photoURL == null ? null : NetworkImage(user.photoURL!),
+        child: Text(
+          label.characters.first.toUpperCase(),
+          style: const TextStyle(fontWeight: FontWeight.w700, color: NestraColors.textPrimary),
+        ),
+      ),
     );
   }
 }
@@ -220,8 +286,9 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _Connecting extends StatelessWidget {
-  const _Connecting({required this.online});
+  const _Connecting({required this.online, this.user});
   final bool online;
+  final User? user;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -236,6 +303,10 @@ class _Connecting extends StatelessWidget {
               'Make sure the backend is running at $apiBase',
               style: const TextStyle(color: NestraColors.textSecondary, fontSize: 13),
             ),
+            if (user != null) ...[
+              const SizedBox(height: 16),
+              TextButton(onPressed: () => FirebaseAuth.instance.signOut(), child: const Text('Sign out')),
+            ],
           ],
         ),
       );

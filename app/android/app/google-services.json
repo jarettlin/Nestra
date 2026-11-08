@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "63652154009",
+    "project_id": "nestra-6727f",
+    "storage_bucket": "nestra-6727f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:63652154009:android:72029202fbba088c508608",
+        "android_client_info": {
+          "package_name": "com.jarettlin.nestra"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "63652154009-69u901k07ntbqcj7a8phmqah70grio41.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtjN8n527fYFBQHjRS5qXebQ5z0zaJ_5c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "63652154009-69u901k07ntbqcj7a8phmqah70grio41.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

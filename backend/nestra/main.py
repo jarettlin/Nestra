@@ -2,36 +2,52 @@
 
 Run:  uvicorn nestra.main:app --reload
 Docs: http://127.0.0.1:8000/docs
+
+Every request works on the caller's own home. With NESTRA_AUTH=firebase the
+caller is identified by a Firebase ID token; with NESTRA_AUTH=none (default)
+everyone shares one local home.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from . import activity
-from .commands import CommandProcessor
+from .auth import (
+    Authenticator,
+    AuthError,
+    FirebaseAuth,
+    NoAuth,
+    UserInfo,
+    find_project_id,
+    firebase_app,
+    require_credentials,
+)
 from .fuzzy.engine import NoRuleFired
 from .fuzzy.rules import SYSTEMS
+from .sessions import HomeSession, SessionManager
 from .simulator import Home, SimClock
 from .simulator.devices import APPLIANCE_KINDS, DEVICE_CLASSES, DEVICE_TYPE_LABELS
-from .simulator.home import DEFAULT_CONFIG, HomeConfig
-from .store import HomeStore, JsonFileStore
-from .store import attach as attach_store
+from .simulator.home import DEFAULT_CONFIG, Environment, HomeConfig, Room
+from .store import FirestoreStore, HomeStore, JsonFileStore
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_WEB_DIR = BACKEND_DIR.parent / "app" / "build" / "web"
 DEFAULT_STATE_FILE = BACKEND_DIR / "var" / "home.json"
+DEFAULT_CREDENTIALS = BACKEND_DIR / "var" / "firebase-admin.json"
+STARTER_ROOMS = ("Living Room", "Bedroom", "Kitchen")
 
 
 def _env_float(name: str, default: float | None) -> float | None:
@@ -39,11 +55,25 @@ def _env_float(name: str, default: float | None) -> float | None:
     return float(raw) if raw else default
 
 
+def _env_path(name: str, default: Path) -> Path:
+    return Path(os.getenv(name, default))
+
+
 @dataclass
 class Settings:
     """Read from environment variables when created."""
 
-    home_config: Path = field(default_factory=lambda: Path(os.getenv("NESTRA_HOME_CONFIG", DEFAULT_CONFIG)))
+    # none = no login, one shared local home. firebase = Firebase ID tokens required.
+    auth: str = field(default_factory=lambda: os.getenv("NESTRA_AUTH", "none"))
+    # file = JSON files under var/. firestore = Firestore (needs Firebase credentials).
+    storage: str = field(default_factory=lambda: os.getenv("NESTRA_STORAGE", "file"))
+    # Service-account key for the Firebase Admin SDK. Never commit it.
+    firebase_credentials: Path = field(default_factory=lambda: _env_path("NESTRA_FIREBASE_CREDENTIALS", DEFAULT_CREDENTIALS))
+    firebase_project: str | None = field(default_factory=lambda: os.getenv("NESTRA_FIREBASE_PROJECT"))
+    # What a brand-new user's home starts as: "starter" (empty rooms) or "demo" (sample devices).
+    new_home: str = field(default_factory=lambda: os.getenv("NESTRA_NEW_HOME", "starter"))
+
+    home_config: Path = field(default_factory=lambda: _env_path("NESTRA_HOME_CONFIG", DEFAULT_CONFIG))
     # Simulated seconds per real second. 10 makes room temperature visibly react to the AC.
     time_scale: float = field(default_factory=lambda: _env_float("NESTRA_TIME_SCALE", 10.0))
     # Pin the simulated start time (e.g. 20.5 = 20:30) to demo evening behaviour.
@@ -52,31 +82,10 @@ class Settings:
     # Room the wall tablet is mounted in; used when a command doesn't name a room.
     default_room: str | None = field(default_factory=lambda: os.getenv("NESTRA_DEFAULT_ROOM", "living_room"))
     # Built Flutter web app to serve at "/". Run `flutter build web` in app/ first.
-    web_dir: Path = field(default_factory=lambda: Path(os.getenv("NESTRA_WEB_DIR", DEFAULT_WEB_DIR)))
-    # Where your rooms and devices are saved. Seeded from home_config on first run;
-    # delete it to start over with the demo home.
-    state_file: Path = field(default_factory=lambda: Path(os.getenv("NESTRA_STATE_FILE", DEFAULT_STATE_FILE)))
-
-
-class Hub:
-    """Fans Home events out to every connected WebSocket client."""
-
-    def __init__(self, max_queue: int = 256) -> None:
-        self._clients: set[asyncio.Queue[dict[str, Any]]] = set()
-        self._max_queue = max_queue
-
-    def register(self) -> asyncio.Queue[dict[str, Any]]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(self._max_queue)
-        self._clients.add(queue)
-        return queue
-
-    def unregister(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
-        self._clients.discard(queue)
-
-    def publish(self, message: dict[str, Any]) -> None:
-        for queue in list(self._clients):
-            with contextlib.suppress(asyncio.QueueFull):  # slow client: drop, it can resync
-                queue.put_nowait(message)
+    web_dir: Path = field(default_factory=lambda: _env_path("NESTRA_WEB_DIR", DEFAULT_WEB_DIR))
+    # File storage: the shared local home, and one file per signed-in user.
+    state_file: Path = field(default_factory=lambda: _env_path("NESTRA_STATE_FILE", DEFAULT_STATE_FILE))
+    homes_dir: Path = field(default_factory=lambda: _env_path("NESTRA_HOMES_DIR", BACKEND_DIR / "var" / "homes"))
 
 
 class CommandRequest(BaseModel):
@@ -100,80 +109,127 @@ class FuzzyRequest(BaseModel):
     inputs: dict[str, float] = Field(examples=[{"temperature": 29, "humidity": 70}])
 
 
+# --------------------------------------------------------------------------- wiring
+def _demo_config(settings: Settings) -> HomeConfig:
+    return HomeConfig.model_validate_json(Path(settings.home_config).read_text())
+
+
+def _starter_config(settings: Settings) -> HomeConfig:
+    weather = _demo_config(settings).weather
+    rooms = [
+        Room(
+            id=name.lower().replace(" ", "_"),
+            name=name,
+            environment=Environment(temperature=weather.mean_temperature - 1, humidity=weather.humidity - 5),
+        )
+        for name in STARTER_ROOMS
+    ]
+    return HomeConfig(name="My Home", weather=weather, rooms=rooms, devices=[])
+
+
+def _build_auth(settings: Settings) -> Authenticator:
+    if settings.auth == "none":
+        return NoAuth()
+    if settings.auth == "firebase":
+        project = find_project_id(settings.firebase_credentials, settings.firebase_project)
+        return FirebaseAuth(firebase_app(settings.firebase_credentials, project))
+    raise ValueError(f"NESTRA_AUTH must be 'none' or 'firebase', not {settings.auth!r}")
+
+
+def _build_store_factory(settings: Settings):
+    if settings.storage == "firestore":
+        from firebase_admin import firestore
+
+        require_credentials(settings.firebase_credentials)
+        project = find_project_id(settings.firebase_credentials, settings.firebase_project)
+        client = firestore.client(firebase_app(settings.firebase_credentials, project))
+        return lambda uid: FirestoreStore(client, uid)
+    if settings.storage == "file":
+        def file_store(uid: str) -> HomeStore:
+            if uid == "local":
+                return JsonFileStore(settings.state_file)
+            safe = "".join(c for c in uid if c.isalnum() or c in "-_")
+            return JsonFileStore(settings.homes_dir / f"{safe}.json")
+        return file_store
+    raise ValueError(f"NESTRA_STORAGE must be 'file' or 'firestore', not {settings.storage!r}")
+
+
+def _bearer(request: Request) -> str | None:
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else None
+
+
 def create_app(
     home: Home | None = None,
     settings: Settings | None = None,
     *,
     simulate: bool = True,
     store: HomeStore | None = None,
+    authenticator: Authenticator | None = None,
 ) -> FastAPI:
-    """Build the app. Passing `home` (as tests do) skips loading and saving unless a store is given."""
+    """Build the app.
+
+    Passing `home` (as tests do) uses that one home for the local user, saved
+    only if a `store` is given.
+    """
     settings = settings or Settings()
-    if home is None:
-        clock = (
-            SimClock.at_hour(settings.start_hour, scale=settings.time_scale)
-            if settings.start_hour is not None
-            else SimClock(scale=settings.time_scale)
-        )
-        store = store or JsonFileStore(settings.state_file)
-        config = store.load() or HomeConfig.model_validate_json(Path(settings.home_config).read_text())
-        home = Home(config, clock=clock)
-    if store is not None:
-        store.save(home.to_config())
-        attach_store(home, store)
-    processor = CommandProcessor(home)
-    hub = Hub()
-    home.subscribe(hub.publish)
+    clock = (
+        SimClock.at_hour(settings.start_hour, scale=settings.time_scale)
+        if settings.start_hour is not None
+        else SimClock(scale=settings.time_scale)
+    )
+    authenticator = authenticator or _build_auth(settings)
+
+    def new_home(uid: str) -> HomeConfig:
+        # The shared local home starts as the demo so there's something to play with.
+        if uid == "local" or settings.new_home == "demo":
+            return _demo_config(settings)
+        return _starter_config(settings)
+
+    manager = SessionManager(
+        clock=home.clock if home else clock,
+        store_for=(lambda uid: store) if home else _build_store_factory(settings),
+        new_home=new_home,
+    )
+    if home is not None:
+        manager.add("local", home, store)
 
     async def simulation_loop() -> None:
-        dt_minutes = settings.tick_seconds * home.clock.scale / 60
         while True:
             await asyncio.sleep(settings.tick_seconds)
-            home.tick(dt_minutes)
+            manager.tick(settings.tick_seconds * manager.clock.scale / 60)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        home.log("Simulator started", detail=f"time x{home.clock.scale:g}")
         task = asyncio.create_task(simulation_loop()) if simulate else None
         yield
         if task:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        manager.flush()
 
-    app = FastAPI(title="Nestra", version="0.1.0", lifespan=lifespan)
-    app.state.home = home
-    app.state.processor = processor
+    app = FastAPI(title="Nestra", version="0.2.0", lifespan=lifespan)
+    app.state.manager = manager
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-    def run_command(req: CommandRequest, source: str) -> dict[str, Any]:
+    def current_user(request: Request) -> UserInfo:
+        try:
+            return authenticator.verify(_bearer(request))
+        except AuthError as e:
+            raise HTTPException(401, str(e)) from e
+
+    def current_session(user: UserInfo = Depends(current_user)) -> HomeSession:
+        return manager.get(user.uid)
+
+    def run_command(session: HomeSession, req: CommandRequest, source: str) -> dict[str, Any]:
+        home = session.home
         if req.room_context is not None and req.room_context not in home.rooms:
             raise HTTPException(404, f"Unknown room {req.room_context!r}")
         room = req.room_context or (settings.default_room if settings.default_room in home.rooms else None)
-        return processor.execute(req.text, room_context=room, confirm=req.confirm, source=source).to_dict()
+        return session.processor.execute(req.text, room_context=room, confirm=req.confirm, source=source).to_dict()
 
-    # ------------------------------------------------------------------ REST
-    @app.get("/api/health")
-    def health() -> dict[str, Any]:
-        return {"ok": True, "time": home.clock.now().isoformat(timespec="seconds")}
-
-    @app.get("/api/home")
-    def get_home() -> dict[str, Any]:
-        return home.snapshot()
-
-    @app.get("/api/rooms/{room_id}")
-    def get_room(room_id: str) -> dict[str, Any]:
-        if room_id not in home.rooms:
-            raise HTTPException(404, f"Unknown room {room_id!r}")
-        return home.room_snapshot(room_id)
-
-    @app.get("/api/devices/{device_id}")
-    def get_device(device_id: str) -> dict[str, Any]:
-        if device_id not in home.devices:
-            raise HTTPException(404, f"Unknown device {device_id!r}")
-        return home.devices[device_id].model_dump()
-
-    def _guard(fn):
+    def guard(fn):
         """Map model errors to HTTP errors."""
         try:
             return fn()
@@ -184,6 +240,19 @@ def create_app(
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
 
+    # ------------------------------------------------------------------ REST
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        return {"ok": True, "time": manager.clock.now().isoformat(timespec="seconds"), "auth": authenticator.mode}
+
+    @app.get("/api/me")
+    def me(user: UserInfo = Depends(current_user)) -> dict[str, Any]:
+        return {"uid": user.uid, "email": user.email, "name": user.name, "auth": authenticator.mode}
+
+    @app.get("/api/home")
+    def get_home(s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        return s.home.snapshot()
+
     @app.get("/api/catalog")
     def get_catalog() -> dict[str, Any]:
         """Device types and appliance kinds the "Add device" form can offer."""
@@ -192,37 +261,50 @@ def create_app(
             "appliance_kinds": [{"kind": k, "label": label} for k, (label, _) in APPLIANCE_KINDS.items()],
         }
 
+    @app.get("/api/rooms/{room_id}")
+    def get_room(room_id: str, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        if room_id not in s.home.rooms:
+            raise HTTPException(404, f"Unknown room {room_id!r}")
+        return s.home.room_snapshot(room_id)
+
     @app.post("/api/rooms", status_code=201)
-    def create_room(req: RoomRequest) -> dict[str, Any]:
-        room = _guard(lambda: home.add_room(req.name))
-        return home.room_snapshot(room.id)
+    def create_room(req: RoomRequest, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        room = guard(lambda: s.home.add_room(req.name))
+        return s.home.room_snapshot(room.id)
 
     @app.patch("/api/rooms/{room_id}")
-    def update_room(room_id: str, req: RoomRequest) -> dict[str, Any]:
-        _guard(lambda: home.rename_room(room_id, req.name))
-        return home.room_snapshot(room_id)
+    def update_room(room_id: str, req: RoomRequest, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        guard(lambda: s.home.rename_room(room_id, req.name))
+        return s.home.room_snapshot(room_id)
 
     @app.delete("/api/rooms/{room_id}")
-    def delete_room(room_id: str) -> dict[str, Any]:
-        removed = _guard(lambda: home.remove_room(room_id))
-        return {"removed_devices": removed}
+    def delete_room(room_id: str, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        return {"removed_devices": guard(lambda: s.home.remove_room(room_id))}
+
+    @app.get("/api/devices/{device_id}")
+    def get_device(device_id: str, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        if device_id not in s.home.devices:
+            raise HTTPException(404, f"Unknown device {device_id!r}")
+        return s.home.devices[device_id].model_dump()
 
     @app.post("/api/devices", status_code=201)
-    def create_device(req: NewDeviceRequest) -> dict[str, Any]:
+    def create_device(req: NewDeviceRequest, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
         if req.type not in DEVICE_CLASSES:
             raise HTTPException(422, f"Unknown device type {req.type!r}")
         extra = {"kind": req.kind} if req.type == "appliance" and req.kind else {}
-        device = _guard(lambda: home.add_device(req.type, req.name, req.room_id, **extra))
-        return device.model_dump()
+        return guard(lambda: s.home.add_device(req.type, req.name, req.room_id, **extra)).model_dump()
 
     @app.delete("/api/devices/{device_id}")
-    def delete_device(device_id: str) -> dict[str, Any]:
-        _guard(lambda: home.remove_device(device_id))
+    def delete_device(device_id: str, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
+        guard(lambda: s.home.remove_device(device_id))
         return {"ok": True}
 
     @app.patch("/api/devices/{device_id}")
-    def patch_device(device_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    def patch_device(
+        device_id: str, updates: dict[str, Any], s: HomeSession = Depends(current_session)
+    ) -> dict[str, Any]:
         """Control a device (on, brightness, speed...) or rename/move it (name, room_id)."""
+        home = s.home
         if device_id not in home.devices:
             raise HTTPException(404, f"Unknown device {device_id!r}")
         structural = {k: updates.pop(k) for k in ("name", "room_id") if k in updates}
@@ -233,32 +315,30 @@ def create_app(
             changes += home.update_device(device_id, updates, source="manual") if updates else []
             return changes
 
-        changes = _guard(apply)
+        changes = guard(apply)
         if kind_changed:
             home.structure_version += 1  # appliance kind changes the words that match it
         activity.record(home, device_id, changes, source="manual")
         return {"device": home.devices[device_id].model_dump(), "changes": [c.to_dict() for c in changes]}
 
     @app.post("/api/command")
-    def post_command(req: CommandRequest) -> dict[str, Any]:
+    def post_command(req: CommandRequest, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
         """Natural-language command (typed, or the transcript from speech-to-text)."""
-        return run_command(req, source="voice")
+        return run_command(s, req, source="voice")
 
     @app.get("/api/activity")
-    def get_activity(limit: int = 20) -> list[dict[str, Any]]:
-        return [a.model_dump() for a in list(home.activity)[: max(1, min(limit, 200))]]
+    def get_activity(limit: int = 20, s: HomeSession = Depends(current_session)) -> list[dict[str, Any]]:
+        return [a.model_dump() for a in list(s.home.activity)[: max(1, min(limit, 200))]]
 
     @app.get("/api/fuzzy")
     def list_fuzzy_systems() -> dict[str, Any]:
         return {
             name: {
-                "inputs": {
-                    v.name: {"range": [v.lo, v.hi], "terms": list(v.terms)} for v in s.inputs.values()
-                },
-                "output": {"name": s.output.name, "range": [s.output.lo, s.output.hi], "terms": list(s.output.terms)},
-                "rules": [r.describe(s.output.name) for r in s.rules],
+                "inputs": {v.name: {"range": [v.lo, v.hi], "terms": list(v.terms)} for v in sys.inputs.values()},
+                "output": {"name": sys.output.name, "range": [sys.output.lo, sys.output.hi], "terms": list(sys.output.terms)},
+                "rules": [r.describe(sys.output.name) for r in sys.rules],
             }
-            for name, s in SYSTEMS.items()
+            for name, sys in SYSTEMS.items()
         }
 
     @app.post("/api/fuzzy/{system}")
@@ -274,12 +354,24 @@ def create_app(
     # ------------------------------------------------------------- WebSocket
     @app.websocket("/ws")
     async def websocket(ws: WebSocket) -> None:
-        """Server -> client: snapshot, device, environment, activity, command_result, error.
-        Client -> server: {"type": "command", "text": ..., "room_context"?, "confirm"?} or {"type": "ping"}.
+        """First client message must be {"type": "auth", "token": "<Firebase ID token>"}
+        (ignored when auth is off). Then:
+        Server -> client: snapshot, device, environment, activity, command_result, error.
+        Client -> server: {"type": "command", "text": ..., "room_context"?, "confirm"?},
+        {"type": "snapshot"} or {"type": "ping"}.
         """
         await ws.accept()
-        queue = hub.register()
-        queue.put_nowait({"type": "snapshot", "data": home.snapshot()})
+        try:
+            user = await _authenticate_ws(ws, authenticator)
+        except (AuthError, asyncio.TimeoutError, WebSocketDisconnect, ValueError) as e:
+            with contextlib.suppress(Exception):
+                await ws.send_json({"type": "error", "data": {"message": str(e) or "Sign in required", "code": 401}})
+                await ws.close(code=4401)
+            return
+
+        session = manager.get(user.uid)
+        queue = session.hub.register()
+        queue.put_nowait({"type": "snapshot", "data": session.home.snapshot()})
 
         async def pump() -> None:
             while True:
@@ -293,20 +385,21 @@ def create_app(
                 if kind == "command":
                     try:
                         req = CommandRequest.model_validate({k: v for k, v in msg.items() if k != "type"})
-                        result = run_command(req, source="voice")
-                        queue.put_nowait({"type": "command_result", "data": result})
+                        queue.put_nowait({"type": "command_result", "data": run_command(session, req, "voice")})
                     except (ValidationError, HTTPException) as e:
                         queue.put_nowait({"type": "error", "data": {"message": str(e)}})
                 elif kind == "ping":
                     queue.put_nowait({"type": "pong"})
                 elif kind == "snapshot":
-                    queue.put_nowait({"type": "snapshot", "data": home.snapshot()})
+                    queue.put_nowait({"type": "snapshot", "data": session.home.snapshot()})
+                elif kind == "auth":
+                    pass  # token refresh; the connection is already authenticated
                 else:
                     queue.put_nowait({"type": "error", "data": {"message": f"Unknown message type {kind!r}"}})
         except WebSocketDisconnect:
             pass
         finally:
-            hub.unregister(queue)
+            session.hub.unregister(queue)
             sender.cancel()
 
     # Serve the built Flutter dashboard (app/build/web) at "/" when it exists,
@@ -315,6 +408,16 @@ def create_app(
         app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")
 
     return app
+
+
+async def _authenticate_ws(ws: WebSocket, authenticator: Authenticator) -> UserInfo:
+    if authenticator.mode == "none":
+        return authenticator.verify(None)
+    raw = await asyncio.wait_for(ws.receive_text(), timeout=10)
+    msg = json.loads(raw)
+    if not isinstance(msg, dict) or msg.get("type") != "auth":
+        raise AuthError("Sign in required")
+    return authenticator.verify(msg.get("token"))
 
 
 app = create_app()

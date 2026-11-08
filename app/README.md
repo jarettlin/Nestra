@@ -25,6 +25,30 @@ flutter run -d web-server --web-port 8080
 Point the app at another backend with `--dart-define=NESTRA_API=http://192.168.1.20:8000`,
 and show a name in the greeting with `--dart-define=NESTRA_USER=Alex`.
 
+## Sign-in (Firebase Auth)
+
+The app opens on a login screen (email/password or Google) and sends the user's
+Firebase ID token to the backend, which keeps a separate home for each account.
+
+### Local testing with the Auth emulator
+
+No real accounts needed: run the Firebase Auth emulator and point both sides at it.
+
+```bash
+firebase emulators:start --only auth
+```
+
+```bash
+cd ../backend && NESTRA_AUTH=firebase FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 .venv/bin/uvicorn nestra.main:app
+```
+
+```bash
+flutter build web --dart-define=NESTRA_AUTH_EMULATOR=localhost:9099
+```
+
+Emulator test account (exists only in the emulator, which forgets it when stopped;
+create it from the login screen): `tester@nestra.test` / `nestra-emulator-1`.
+
 ## Structure
 
 ```

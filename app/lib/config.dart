@@ -14,3 +14,6 @@ Uri wsUri() {
   final base = Uri.parse(apiBase);
   return base.replace(scheme: base.scheme == 'https' ? 'wss' : 'ws', path: '/ws');
 }
+
+/// Use the local Firebase Auth emulator, e.g. --dart-define=NESTRA_AUTH_EMULATOR=localhost:9099
+const String authEmulator = String.fromEnvironment('NESTRA_AUTH_EMULATOR');

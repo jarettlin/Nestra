@@ -31,6 +31,11 @@ Environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `NESTRA_AUTH` | `none` | `none` = no login, one shared home. `firebase` = Firebase ID token required, one home per user |
+| `NESTRA_STORAGE` | `file` | `file` = JSON under `var/` (`var/homes/<uid>.json` per user). `firestore` = Firestore `homes/{uid}` |
+| `NESTRA_FIREBASE_CREDENTIALS` | `var/firebase-admin.json` | Service-account key, needed for Firestore storage only. Git-ignored; never commit it |
+| `NESTRA_NEW_HOME` | `starter` | New users start with empty rooms (`starter`) or the sample devices (`demo`) |
+| `FIREBASE_AUTH_EMULATOR_HOST` | unset | e.g. `localhost:9099` to accept tokens from the local Auth emulator |
 | `NESTRA_TIME_SCALE` | `10` | Simulated seconds per real second (0 freezes time) |
 | `NESTRA_START_HOUR` | now | Start the simulated clock at this hour, e.g. `20.5` |
 | `NESTRA_DEFAULT_ROOM` | `living_room` | Room the wall tablet is in, used when a command names no room |
@@ -49,7 +54,9 @@ nestra/
   nlu/parser.py         rule-based text → ParsedCommand (device, room, action, term, hedge)
   commands.py           pipeline: resolve devices, ask to clarify, run fuzzy, apply changes
   activity.py           readable before/after activity entries ("Fan speed High (85%) → Low (25%)")
-  store.py              saving the home (local JSON file now; Firestore later)
+  store.py              saving homes and history: JSON files or Firestore, written in the background
+  auth.py               Firebase ID token verification (or no-login mode)
+  sessions.py           one live home per signed-in user
   main.py               FastAPI REST + WebSocket
   cli.py                console for trying commands
 ```
@@ -77,6 +84,10 @@ The `/api/command` response contains `reply` (text to show or speak), `changes`,
 `explanations` (the fuzzy trace for the "why" panel), and either
 `needs_clarification` with `options` (e.g. which room's AC) or
 `needs_confirmation` (resend with `"confirm": true`, used for unlocking doors).
+
+With `NESTRA_AUTH=firebase`, REST calls need `Authorization: Bearer <Firebase ID token>`
+(401 otherwise) and the WebSocket's first message must be `{"type": "auth", "token": "..."}`.
+`GET /api/me` returns the signed-in user.
 
 WebSocket `/ws`:
 

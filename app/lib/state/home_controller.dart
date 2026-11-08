@@ -12,9 +12,9 @@ import '../services/live.dart';
 /// device / environment / activity events. User actions go out over REST and
 /// are applied optimistically so sliders feel instant.
 class HomeController extends ChangeNotifier {
-  HomeController({NestraApi? api, LiveConnection? live})
-      : api = api ?? NestraApi(),
-        live = live ?? LiveConnection();
+  HomeController({NestraApi? api, LiveConnection? live, TokenProvider? token})
+      : api = api ?? NestraApi(token: token),
+        live = live ?? LiveConnection(token: token);
 
   final NestraApi api;
   final LiveConnection live;

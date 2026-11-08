@@ -150,6 +150,12 @@ class Home:
         self._emit("activity", entry.model_dump())
         return entry
 
+    def restore_activity(self, entries: list[ActivityEntry]) -> None:
+        """Load saved history (newest first) and continue numbering after it."""
+        ordered = sorted(entries, key=lambda e: e.id, reverse=True)
+        self.activity = deque(ordered[: self.activity.maxlen], maxlen=self.activity.maxlen)
+        self._activity_ids = count(max((e.id for e in entries), default=0) + 1)
+
     # ------------------------------------------------------------------ state
     def devices_in(self, room_id: str) -> list[DeviceBase]:
         return [d for d in self.devices.values() if d.room_id == room_id]

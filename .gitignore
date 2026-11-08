@@ -6,3 +6,6 @@ __pycache__/
 .DS_Store
 .claude/
 backend/var/
+.mcp.json
+firebase-debug.log
+firestore-debug.log

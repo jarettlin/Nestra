@@ -6,12 +6,15 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config.dart';
+import 'api.dart' show TokenProvider;
 
 /// WebSocket to the backend that reconnects automatically with backoff.
 class LiveConnection {
-  LiveConnection({Uri? uri}) : _uri = uri ?? wsUri();
+  LiveConnection({Uri? uri, this.token}) : _uri = uri ?? wsUri();
 
   final Uri _uri;
+  final TokenProvider? token;
+  bool _refreshToken = false;
   final _messages = StreamController<Map<String, dynamic>>.broadcast();
   final connected = ValueNotifier<bool>(false);
   WebSocketChannel? _channel;
@@ -28,11 +31,19 @@ class LiveConnection {
         final channel = WebSocketChannel.connect(_uri);
         _channel = channel;
         await channel.ready;
+        // The backend expects the sign-in token as the first message.
+        final idToken = await token?.call(forceRefresh: _refreshToken);
+        _refreshToken = false;
+        channel.sink.add(jsonEncode({'type': 'auth', 'token': idToken}));
         connected.value = true;
         backoff = const Duration(seconds: 1);
         await for (final raw in channel.stream) {
           final decoded = jsonDecode(raw as String);
-          if (decoded is Map<String, dynamic>) _messages.add(decoded);
+          if (decoded is! Map<String, dynamic>) continue;
+          if (decoded['type'] == 'error' && (decoded['data'] as Map?)?['code'] == 401) {
+            _refreshToken = true; // token expired: get a fresh one when reconnecting
+          }
+          _messages.add(decoded);
         }
       } catch (e) {
         debugPrint('Nestra live connection error: $e');

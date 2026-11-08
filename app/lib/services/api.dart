@@ -12,11 +12,15 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// Returns the signed-in user's Firebase ID token (null when signed out).
+typedef TokenProvider = Future<String?> Function({bool forceRefresh});
+
 /// REST calls to the Nestra backend. Live updates arrive separately over the WebSocket.
 class NestraApi {
-  NestraApi({http.Client? client}) : _client = client ?? http.Client();
+  NestraApi({http.Client? client, this.token}) : _client = _AuthClient(client ?? http.Client(), token);
 
   final http.Client _client;
+  final TokenProvider? token;
   static const _headers = {'content-type': 'application/json'};
 
   Future<void> patchDevice(String id, Map<String, dynamic> updates) async {
@@ -80,11 +84,27 @@ class NestraApi {
 
   void _check(http.Response res) {
     if (res.statusCode >= 200 && res.statusCode < 300) return;
+    if (res.statusCode == 401) throw ApiException('Your session has expired. Please sign in again.');
     var message = 'Request failed (${res.statusCode})';
     try {
       final detail = (jsonDecode(res.body) as Map<String, dynamic>)['detail'];
       if (detail != null) message = detail is String ? detail : jsonEncode(detail);
     } catch (_) {}
     throw ApiException(message);
+  }
+}
+
+/// Adds `Authorization: Bearer <Firebase ID token>` to every request.
+class _AuthClient extends http.BaseClient {
+  _AuthClient(this._inner, this._token);
+
+  final http.Client _inner;
+  final TokenProvider? _token;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final token = await _token?.call();
+    if (token != null) request.headers['authorization'] = 'Bearer $token';
+    return _inner.send(request);
   }
 }
