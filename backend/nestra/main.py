@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from .commands import CommandProcessor
@@ -23,6 +24,9 @@ from .fuzzy.engine import NoRuleFired
 from .fuzzy.rules import SYSTEMS
 from .simulator import Home, SimClock
 from .simulator.home import DEFAULT_CONFIG
+
+
+DEFAULT_WEB_DIR = Path(__file__).resolve().parents[2] / "app" / "build" / "web"
 
 
 def _env_float(name: str, default: float | None) -> float | None:
@@ -42,6 +46,8 @@ class Settings:
     tick_seconds: float = field(default_factory=lambda: _env_float("NESTRA_TICK_SECONDS", 1.0))
     # Room the wall tablet is mounted in; used when a command doesn't name a room.
     default_room: str | None = field(default_factory=lambda: os.getenv("NESTRA_DEFAULT_ROOM", "living_room"))
+    # Built Flutter web app to serve at "/". Run `flutter build web` in app/ first.
+    web_dir: Path = field(default_factory=lambda: Path(os.getenv("NESTRA_WEB_DIR", DEFAULT_WEB_DIR)))
 
 
 class Hub:
@@ -222,6 +228,11 @@ def create_app(home: Home | None = None, settings: Settings | None = None, *, si
         finally:
             hub.unregister(queue)
             sender.cancel()
+
+    # Serve the built Flutter dashboard (app/build/web) at "/" when it exists,
+    # so one server hosts both the API and the UI.
+    if settings.web_dir.is_dir():
+        app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")
 
     return app
 

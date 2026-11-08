@@ -8,6 +8,15 @@ settings for simulated appliances.
 | Part | Stack | Status |
 |---|---|---|
 | [backend/](backend/) | Python, FastAPI, NumPy | Simulator, fuzzy engine, NLU, REST + WebSocket API |
-| app/ | Flutter | Planned: in-wall tablet dashboard |
+| [app/](app/) | Flutter | In-wall tablet dashboard with live updates and a command box |
 
-See [backend/README.md](backend/README.md) to run the backend.
+## Quick start
+
+```bash
+cd backend && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+cd ../app && flutter build web
+cd ../backend && .venv/bin/uvicorn nestra.main:app
+```
+
+Open http://localhost:8000 for the dashboard (API docs at /docs).
+See [backend/README.md](backend/README.md) and [app/README.md](app/README.md) for details.

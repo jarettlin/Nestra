@@ -35,6 +35,7 @@ Environment variables:
 | `NESTRA_START_HOUR` | now | Start the simulated clock at this hour, e.g. `20.5` |
 | `NESTRA_DEFAULT_ROOM` | `living_room` | Room the wall tablet is in, used when a command names no room |
 | `NESTRA_HOME_CONFIG` | `nestra/data/home.json` | Rooms and devices to simulate |
+| `NESTRA_WEB_DIR` | `../app/build/web` | Built Flutter dashboard served at `/` (skipped if missing) |
 
 ## Layout
 
