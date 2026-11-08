@@ -1,9 +1,11 @@
 from .clock import SimClock
-from .devices import AirConditioner, Blinds, Device, Fan, Light, Lock
-from .home import ActivityEntry, Change, Home, HomeConfig, Room
+from .devices import Appliance, AirConditioner, Blinds, Device, Fan, Light, Lock
+from .home import ActivityChange, ActivityEntry, Change, Home, HomeConfig, Room
 
 __all__ = [
+    "ActivityChange",
     "ActivityEntry",
+    "Appliance",
     "AirConditioner",
     "Blinds",
     "Change",

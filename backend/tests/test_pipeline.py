@@ -54,8 +54,9 @@ def test_ac_cools_room_over_time(home):
     assert home.rooms["bedroom"].environment.temperature < start - 1
 
 
-def test_api_and_websocket():
-    app = create_app(settings=Settings(start_hour=14, time_scale=0), simulate=False)
+def test_api_and_websocket(tmp_path):
+    settings = Settings(start_hour=14, time_scale=0, state_file=tmp_path / "home.json")
+    app = create_app(settings=settings, simulate=False)
     with TestClient(app) as client:
         assert client.get("/api/home").json()["rooms"]
         r = client.post("/api/command", json={"text": "turn off the lights"})

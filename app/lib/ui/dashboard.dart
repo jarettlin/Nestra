@@ -6,6 +6,7 @@ import '../theme.dart';
 import 'activity_panel.dart';
 import 'command_dialog.dart';
 import 'device_tile.dart';
+import 'manage_dialogs.dart';
 import 'room_card.dart';
 
 class Dashboard extends StatefulWidget {
@@ -104,7 +105,10 @@ class _DashboardState extends State<Dashboard> {
             crossAxisSpacing: 14,
             mainAxisSpacing: 14,
           ),
-          children: [for (final d in roomDevices) DeviceTile(device: d, controller: c)],
+          children: [
+            for (final d in roomDevices) DeviceTile(device: d, controller: c),
+            AddTile(label: 'Add device', onTap: () => showDeviceForm(context, c, roomId: room.id)),
+          ],
         ),
         const SizedBox(height: 28),
         const _SectionTitle('Rooms'),
@@ -120,6 +124,7 @@ class _DashboardState extends State<Dashboard> {
           children: [
             for (final r in c.rooms)
               RoomCard(room: r, devices: c.devicesIn(r.id), selected: r.id == room.id, controller: c),
+            AddTile(label: 'Add room', onTap: () => showRoomForm(context, c)),
           ],
         ),
       ],

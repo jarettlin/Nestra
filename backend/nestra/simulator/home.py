@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections import deque
 from dataclasses import asdict, dataclass
 from itertools import count
@@ -58,12 +59,27 @@ class HomeConfig(BaseModel):
     devices: list[Device]
 
 
+class ActivityChange(BaseModel):
+    attribute: str
+    label: str  # "Fan speed"
+    old: Any = None
+    new: Any = None
+    old_text: str = ""  # "High (85%)"
+    new_text: str = ""
+
+
 class ActivityEntry(BaseModel):
     id: int
     time: str
     title: str
     detail: str = ""
-    source: str = "system"
+    source: str = "system"  # voice | manual | system | cli
+    device_id: str | None = None
+    device_type: str | None = None
+    room_id: str | None = None
+    room_name: str | None = None
+    changes: list[ActivityChange] = []
+    command: str | None = None  # the spoken/typed command, for voice entries
 
 
 @dataclass(frozen=True)
@@ -99,6 +115,9 @@ class Home:
         self.activity: deque[ActivityEntry] = deque(maxlen=200)
         self._activity_ids = count(1)
         self._listeners: list[Listener] = []
+        # Bumped whenever rooms/devices are added, removed or renamed, so the
+        # command parser knows to rebuild its vocabulary.
+        self.structure_version = 0
         self._update_ambient_light()
 
     @classmethod
@@ -115,13 +134,17 @@ class Home:
         for listener in list(self._listeners):
             listener(message)
 
-    def log(self, title: str, detail: str = "", source: str = "system") -> ActivityEntry:
+    def log(self, title: str, detail: str = "", source: str = "system", **fields: Any) -> ActivityEntry:
+        room_id = fields.get("room_id")
+        if room_id and "room_name" not in fields and room_id in self.rooms:
+            fields["room_name"] = self.rooms[room_id].name
         entry = ActivityEntry(
             id=next(self._activity_ids),
             time=self.clock.now().isoformat(timespec="seconds"),
             title=title,
             detail=detail,
             source=source,
+            **fields,
         )
         self.activity.appendleft(entry)
         self._emit("activity", entry.model_dump())
@@ -187,6 +210,138 @@ class Home:
         if isinstance(updated, Blinds):
             self._update_ambient_light()
         return changes
+
+    # -------------------------------------------------------------- structure
+    def to_config(self) -> HomeConfig:
+        """Current home as a config (what gets saved)."""
+        return HomeConfig(
+            name=self.name,
+            weather=self.weather,
+            rooms=[r.model_copy(deep=True) for r in self.rooms.values()],
+            devices=list(self.devices.values()),
+        )
+
+    def _structure_changed(self) -> None:
+        self.structure_version += 1
+        self._emit("snapshot", self.snapshot())
+
+    def _unique_id(self, name: str, taken: dict[str, Any]) -> str:
+        base = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "item"
+        candidate, n = base, 2
+        while candidate in taken:
+            candidate, n = f"{base}_{n}", n + 1
+        return candidate
+
+    @staticmethod
+    def _clean_name(name: str) -> str:
+        cleaned = " ".join(name.split())
+        if not cleaned:
+            raise ValueError("Name can't be empty")
+        if len(cleaned) > 40:
+            raise ValueError("Name must be 40 characters or fewer")
+        return cleaned
+
+    def _check_room_name(self, name: str, exclude: str | None = None) -> None:
+        for room in self.rooms.values():
+            if room.id != exclude and room.name.lower() == name.lower():
+                raise ValueError(f"There is already a room called {room.name!r}")
+
+    def _check_device_name(self, name: str, room_id: str, exclude: str | None = None) -> None:
+        for d in self.devices_in(room_id):
+            if d.id != exclude and d.name.lower() == name.lower():
+                raise ValueError(f"{self.rooms[room_id].name} already has a device called {d.name!r}")
+
+    def add_room(self, name: str, *, source: str = "manual") -> Room:
+        name = self._clean_name(name)
+        self._check_room_name(name)
+        room = Room(
+            id=self._unique_id(name, self.rooms),
+            name=name,
+            environment=Environment(
+                temperature=self.outside_temperature(), humidity=self.weather.humidity
+            ),
+        )
+        self.rooms[room.id] = room
+        self._update_ambient_light()
+        self.log(f"Added room {name}", source=source, room_id=room.id)
+        self._structure_changed()
+        return room
+
+    def rename_room(self, room_id: str, name: str, *, source: str = "manual") -> Room:
+        room = self.rooms[room_id]
+        name = self._clean_name(name)
+        if name == room.name:
+            return room
+        self._check_room_name(name, exclude=room_id)
+        old = room.name
+        room.name = name
+        self.log(f"Renamed room {old} to {name}", source=source, room_id=room_id)
+        self._structure_changed()
+        return room
+
+    def remove_room(self, room_id: str, *, source: str = "manual") -> list[str]:
+        """Remove a room and every device in it. Returns the removed device ids."""
+        room = self.rooms[room_id]
+        if len(self.rooms) == 1:
+            raise ValueError("A home needs at least one room")
+        removed = [d.id for d in self.devices_in(room_id)]
+        for device_id in removed:
+            del self.devices[device_id]
+        del self.rooms[room_id]
+        count_text = f" and {len(removed)} device{'s' if len(removed) != 1 else ''}" if removed else ""
+        self.log(f"Removed room {room.name}{count_text}", source=source)
+        self._structure_changed()
+        return removed
+
+    def add_device(
+        self, device_type: str, name: str, room_id: str, *, source: str = "manual", **attributes: Any
+    ) -> DeviceBase:
+        if room_id not in self.rooms:
+            raise KeyError(room_id)
+        name = self._clean_name(name)
+        self._check_device_name(name, room_id)
+        forbidden = _IMMUTABLE_FIELDS & attributes.keys()
+        if forbidden:
+            raise ValueError(f"Cannot set {sorted(forbidden)} as attributes")
+        device = _device_adapter.validate_python(
+            {
+                "id": self._unique_id(f"{room_id}_{name}", self.devices),
+                "type": device_type,
+                "name": name,
+                "room_id": room_id,
+                **attributes,
+            }
+        )
+        self.devices[device.id] = device
+        self.log(f"Added {name}", source=source, device_id=device.id, device_type=device.type, room_id=room_id)
+        self._structure_changed()
+        return device
+
+    def edit_device(
+        self, device_id: str, *, name: str | None = None, room_id: str | None = None, source: str = "manual"
+    ) -> list[Change]:
+        """Rename a device or move it to another room."""
+        device = self.devices[device_id]
+        new_name = self._clean_name(name) if name is not None else device.name
+        new_room = room_id if room_id is not None else device.room_id
+        if new_room not in self.rooms:
+            raise KeyError(new_room)
+        self._check_device_name(new_name, new_room, exclude=device_id)
+        changes = [
+            Change(device.id, device.name, device.room_id, attr, old, new)
+            for attr, old, new in (("name", device.name, new_name), ("room_id", device.room_id, new_room))
+            if old != new
+        ]
+        if not changes:
+            return []
+        self.devices[device_id] = device.model_copy(update={"name": new_name, "room_id": new_room})
+        self._structure_changed()
+        return changes
+
+    def remove_device(self, device_id: str, *, source: str = "manual") -> None:
+        device = self.devices.pop(device_id)
+        self.log(f"Removed {device.name}", source=source, device_type=device.type, room_id=device.room_id)
+        self._structure_changed()
 
     # ---------------------------------------------------------------- physics
     def _daylight(self) -> float:

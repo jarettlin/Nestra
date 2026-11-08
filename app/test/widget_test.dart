@@ -75,4 +75,28 @@ void main() {
     expect(r.options.single.roomName, 'Bedroom');
     expect(r.explanations.single.rules.single.strength, closeTo(0.33, 1e-9));
   });
+
+  test('activity entries carry before/after changes', () {
+    final e = ActivityEntry.fromJson({
+      'id': 3,
+      'time': '2026-11-09T14:02:00',
+      'title': 'Air Circulator',
+      'source': 'voice',
+      'room_name': 'Living Room',
+      'command': 'set the fan to high',
+      'changes': [
+        {'attribute': 'speed', 'label': 'Fan speed', 'old_text': 'Low (25%)', 'new_text': 'High (80%)'},
+      ],
+    });
+    expect(e.changes.single.label, 'Fan speed');
+    expect('${e.changes.single.oldText} -> ${e.changes.single.newText}', 'Low (25%) -> High (80%)');
+    expect(e.command, 'set the fan to high');
+  });
+
+  test('appliances are powered devices with a kind', () {
+    const tv = Device({'id': 'tv', 'type': 'appliance', 'name': 'TV', 'room_id': 'r', 'on': true, 'kind': 'tv'});
+    expect(tv.isPowered, isTrue);
+    expect(tv.isActive, isTrue);
+    expect(tv.kind, 'tv');
+  });
 }

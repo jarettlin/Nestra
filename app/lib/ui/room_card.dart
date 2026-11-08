@@ -4,6 +4,7 @@ import '../models.dart';
 import '../state/home_controller.dart';
 import '../theme.dart';
 import 'device_tile.dart' show toggleLock;
+import 'manage_dialogs.dart';
 
 /// Room summary card in the "Rooms" grid. Tap to show that room's devices above.
 class RoomCard extends StatelessWidget {
@@ -34,6 +35,7 @@ class RoomCard extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
         onTap: () => controller.selectRoom(room.id),
+        onLongPress: () => showRoomForm(context, controller, room: room),
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -56,6 +58,18 @@ class RoomCard extends StatelessWidget {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: active ? NestraColors.orange : NestraColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  SizedBox.square(
+                    dimension: 26,
+                    child: IconButton(
+                      tooltip: 'Edit room',
+                      padding: EdgeInsets.zero,
+                      iconSize: 16,
+                      color: NestraColors.textMuted,
+                      onPressed: () => showRoomForm(context, controller, room: room),
+                      icon: const Icon(Icons.more_horiz_rounded),
                     ),
                   ),
                 ],

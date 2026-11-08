@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'models.dart';
+
 /// Colours taken from the Luma in-wall tablet design.
 abstract final class NestraColors {
   static const background = Color(0xFF14151B);
@@ -61,8 +63,29 @@ IconData iconForDevice(String type) => switch (type) {
       'ac' => Icons.ac_unit_rounded,
       'blinds' => Icons.blinds_outlined,
       'lock' => Icons.lock_outline_rounded,
+      'appliance' => Icons.power_settings_new_rounded,
       _ => Icons.devices_other_rounded,
     };
+
+IconData iconForAppliance(String kind) => switch (kind) {
+      'tv' => Icons.tv_rounded,
+      'kettle' => Icons.emoji_food_beverage_outlined,
+      'washer' => Icons.local_laundry_service_outlined,
+      'dryer' => Icons.dry_cleaning_outlined,
+      'fridge' => Icons.kitchen_outlined,
+      'microwave' => Icons.microwave_outlined,
+      'coffee' => Icons.coffee_maker_outlined,
+      'speaker' => Icons.speaker_outlined,
+      'heater' => Icons.local_fire_department_outlined,
+      'purifier' => Icons.filter_vintage_outlined,
+      'vacuum' => Icons.cleaning_services_outlined,
+      'charger' => Icons.battery_charging_full_rounded,
+      'plug' => Icons.power_outlined,
+      _ => Icons.electrical_services_rounded,
+    };
+
+/// Icon for a specific device (appliances use their kind's icon).
+IconData iconFor(Device d) => d.type == 'appliance' ? iconForAppliance(d.kind) : iconForDevice(d.type);
 
 Color colorForDevice(String type) => switch (type) {
       'light' => NestraColors.peach,
@@ -70,6 +93,7 @@ Color colorForDevice(String type) => switch (type) {
       'ac' => NestraColors.teal,
       'blinds' => NestraColors.purple,
       'lock' => NestraColors.red,
+      'appliance' => NestraColors.green,
       _ => NestraColors.textSecondary,
     };
 

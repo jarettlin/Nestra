@@ -144,17 +144,44 @@ class _TimelineItem extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    entry.title,
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(text: entry.title, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        if (entry.roomName != null && entry.changes.isNotEmpty)
+                          TextSpan(
+                            text: '  ${entry.roomName}',
+                            style: const TextStyle(color: NestraColors.textMuted, fontSize: 11.5),
+                          ),
+                      ],
+                    ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12.5, height: 1.35),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '$clock · $source',
-                    style: const TextStyle(fontSize: 11, color: NestraColors.textMuted),
+                  for (final change in entry.changes) _ChangeLine(change: change),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Icon(_sourceIcon(entry.source), size: 11, color: NestraColors.textMuted),
+                      const SizedBox(width: 4),
+                      Text('$clock · $source', style: const TextStyle(fontSize: 11, color: NestraColors.textMuted)),
+                    ],
                   ),
+                  if (entry.command != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        '"${entry.command}"',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                          color: NestraColors.textSecondary,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -163,4 +190,36 @@ class _TimelineItem extends StatelessWidget {
       ),
     );
   }
+}
+
+IconData _sourceIcon(String source) => switch (source) {
+      'voice' => Icons.mic_none_rounded,
+      'manual' => Icons.touch_app_outlined,
+      'cli' => Icons.terminal_rounded,
+      _ => Icons.settings_outlined,
+    };
+
+/// "Fan speed  High (85%) → Medium (55%)"
+class _ChangeLine extends StatelessWidget {
+  const _ChangeLine({required this.change});
+  final ActivityChange change;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text.rich(
+          TextSpan(
+            style: const TextStyle(fontSize: 11.5, height: 1.3),
+            children: [
+              TextSpan(text: '${change.label}  ', style: const TextStyle(color: NestraColors.textSecondary)),
+              TextSpan(text: change.oldText, style: const TextStyle(color: NestraColors.textMuted)),
+              const TextSpan(text: '  →  ', style: TextStyle(color: NestraColors.textMuted)),
+              TextSpan(
+                text: change.newText,
+                style: const TextStyle(color: NestraColors.peach, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+      );
 }

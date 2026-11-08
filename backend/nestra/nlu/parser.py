@@ -81,6 +81,7 @@ class DeviceRef:
     name: str
     type: str
     room_id: str
+    aliases: list[str] = field(default_factory=list)  # e.g. "television" for a TV
 
 
 @dataclass
@@ -89,6 +90,9 @@ class ParsedCommand:
     action: str | None  # on, off, set, increase, decrease, open, close, lock, unlock
     device_types: list[str] = field(default_factory=list)  # empty = decide from context
     device_ids: list[str] = field(default_factory=list)
+    # Devices grouped by the phrase that matched them. A group with several
+    # devices ("tv" matching two TVs) is ambiguous and may need a room.
+    device_groups: list[list[str]] = field(default_factory=list)
     room_ids: list[str] = field(default_factory=list)
     all_scope: bool = False
     value: float | None = None  # absolute number: "set to 40%"
@@ -131,24 +135,28 @@ class CommandParser:
         return commands
 
     # --------------------------------------------------------------- matching
-    def _match_devices(self, clause: str) -> list[tuple[DeviceRef, bool]]:
-        """Match device names exactly, or approximately to tolerate speech-to-text slips.
+    def _match_devices(self, clause: str) -> list[tuple[DeviceRef, bool, str]]:
+        """Match device names or aliases exactly, or names approximately to
+        tolerate speech-to-text slips.
 
-        Returns (device, exact) pairs.
+        Returns (device, exact, matched_phrase) triples.
         """
         words = clause.split()
         matched = []
         for device in self.devices:
             name = device.name.lower()
-            if _phrase(name).search(clause):
-                matched.append((device, True))
+            exact = next(
+                (p for p in (name, *device.aliases) if _phrase(p.lower()).search(clause)), None
+            )
+            if exact is not None:
+                matched.append((device, True, exact.lower()))
                 continue
             n = len(name.split())
             if n < 2:  # single words are too risky to fuzzy-match
                 continue
             windows = (" ".join(words[i : i + n]) for i in range(len(words) - n + 1))
             if any(SequenceMatcher(None, w, name).ratio() >= 0.85 for w in windows):
-                matched.append((device, False))
+                matched.append((device, False, name))
         return matched
 
     def _match_rooms(self, clause: str) -> list[str]:
@@ -181,9 +189,17 @@ class CommandParser:
         if types:
             # "bedroom fan" must not fuzzy-match "Bedroom AC": keep devices of a
             # mentioned type, falling back to exact name matches only.
-            devices = [d for d, _ in matches if d.type in types] or [d for d, exact in matches if exact]
+            kept = [m for m in matches if m[0].type in types] or [m for m in matches if m[1]]
         else:
-            devices = [d for d, _ in matches]
+            kept = matches
+        # A phrase that is part of a longer matched phrase doesn't count on its own:
+        # "reading lamp" shouldn't also pull in a device aliased "lamp".
+        phrases = {p for _, _, p in kept}
+        kept = [m for m in kept if not any(m[2] != p and _phrase(m[2]).search(p) for p in phrases)]
+        devices = list({d.id: d for d, _, _ in kept}.values())
+        groups: dict[str, list[str]] = {}
+        for d, _, p in kept:
+            groups.setdefault(p, []).append(d.id)
         if devices:
             types = list(dict.fromkeys(d.type for d in devices))
         rooms = self._match_rooms(clause)
@@ -199,9 +215,11 @@ class CommandParser:
 
         # "...and set it to dim": inherit the target from the previous clause.
         device_ids = [d.id for d in devices]
+        device_groups = list(groups.values())
         if not types and previous and (re.search(PRONOUN, clause) or not rooms):
             types = list(previous.device_types)
             device_ids = list(previous.device_ids)
+            device_groups = [list(g) for g in previous.device_groups]
             rooms = rooms or list(previous.room_ids)
 
         action = self._action(clause, types, value, delta, term)
@@ -212,6 +230,7 @@ class CommandParser:
             action=action,
             device_types=types,
             device_ids=device_ids,
+            device_groups=device_groups,
             room_ids=rooms,
             all_scope=all_scope,
             value=value,

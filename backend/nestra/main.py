@@ -19,14 +19,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
+from . import activity
 from .commands import CommandProcessor
 from .fuzzy.engine import NoRuleFired
 from .fuzzy.rules import SYSTEMS
 from .simulator import Home, SimClock
-from .simulator.home import DEFAULT_CONFIG
+from .simulator.devices import APPLIANCE_KINDS, DEVICE_CLASSES, DEVICE_TYPE_LABELS
+from .simulator.home import DEFAULT_CONFIG, HomeConfig
+from .store import HomeStore, JsonFileStore
+from .store import attach as attach_store
 
-
-DEFAULT_WEB_DIR = Path(__file__).resolve().parents[2] / "app" / "build" / "web"
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_WEB_DIR = BACKEND_DIR.parent / "app" / "build" / "web"
+DEFAULT_STATE_FILE = BACKEND_DIR / "var" / "home.json"
 
 
 def _env_float(name: str, default: float | None) -> float | None:
@@ -48,6 +53,9 @@ class Settings:
     default_room: str | None = field(default_factory=lambda: os.getenv("NESTRA_DEFAULT_ROOM", "living_room"))
     # Built Flutter web app to serve at "/". Run `flutter build web` in app/ first.
     web_dir: Path = field(default_factory=lambda: Path(os.getenv("NESTRA_WEB_DIR", DEFAULT_WEB_DIR)))
+    # Where your rooms and devices are saved. Seeded from home_config on first run;
+    # delete it to start over with the demo home.
+    state_file: Path = field(default_factory=lambda: Path(os.getenv("NESTRA_STATE_FILE", DEFAULT_STATE_FILE)))
 
 
 class Hub:
@@ -77,11 +85,29 @@ class CommandRequest(BaseModel):
     confirm: bool = Field(False, description="Set true to confirm a sensitive action such as unlocking")
 
 
+class RoomRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=40, examples=["Kitchen"])
+
+
+class NewDeviceRequest(BaseModel):
+    type: str = Field(examples=["appliance"])
+    name: str = Field(min_length=1, max_length=40, examples=["Kettle"])
+    room_id: str = Field(examples=["kitchen"])
+    kind: str | None = Field(None, description="Appliance kind, e.g. tv, kettle (appliances only)")
+
+
 class FuzzyRequest(BaseModel):
     inputs: dict[str, float] = Field(examples=[{"temperature": 29, "humidity": 70}])
 
 
-def create_app(home: Home | None = None, settings: Settings | None = None, *, simulate: bool = True) -> FastAPI:
+def create_app(
+    home: Home | None = None,
+    settings: Settings | None = None,
+    *,
+    simulate: bool = True,
+    store: HomeStore | None = None,
+) -> FastAPI:
+    """Build the app. Passing `home` (as tests do) skips loading and saving unless a store is given."""
     settings = settings or Settings()
     if home is None:
         clock = (
@@ -89,7 +115,12 @@ def create_app(home: Home | None = None, settings: Settings | None = None, *, si
             if settings.start_hour is not None
             else SimClock(scale=settings.time_scale)
         )
-        home = Home.from_file(settings.home_config, clock=clock)
+        store = store or JsonFileStore(settings.state_file)
+        config = store.load() or HomeConfig.model_validate_json(Path(settings.home_config).read_text())
+        home = Home(config, clock=clock)
+    if store is not None:
+        store.save(home.to_config())
+        attach_store(home, store)
     processor = CommandProcessor(home)
     hub = Hub()
     home.subscribe(hub.publish)
@@ -116,9 +147,9 @@ def create_app(home: Home | None = None, settings: Settings | None = None, *, si
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
     def run_command(req: CommandRequest, source: str) -> dict[str, Any]:
-        room = req.room_context or settings.default_room
-        if room is not None and room not in home.rooms:
-            raise HTTPException(404, f"Unknown room {room!r}")
+        if req.room_context is not None and req.room_context not in home.rooms:
+            raise HTTPException(404, f"Unknown room {req.room_context!r}")
+        room = req.room_context or (settings.default_room if settings.default_room in home.rooms else None)
         return processor.execute(req.text, room_context=room, confirm=req.confirm, source=source).to_dict()
 
     # ------------------------------------------------------------------ REST
@@ -142,22 +173,71 @@ def create_app(home: Home | None = None, settings: Settings | None = None, *, si
             raise HTTPException(404, f"Unknown device {device_id!r}")
         return home.devices[device_id].model_dump()
 
-    @app.patch("/api/devices/{device_id}")
-    def patch_device(device_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-        """Manual control from the dashboard (toggles, sliders)."""
-        if device_id not in home.devices:
-            raise HTTPException(404, f"Unknown device {device_id!r}")
+    def _guard(fn):
+        """Map model errors to HTTP errors."""
         try:
-            changes = home.update_device(device_id, updates, source="manual")
+            return fn()
+        except KeyError as e:
+            raise HTTPException(404, f"Unknown id {e.args[0]!r}") from e
         except ValidationError as e:
             raise HTTPException(422, e.errors(include_url=False, include_context=False)) from e
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
-        device = home.devices[device_id]
-        if changes:
-            summary = ", ".join(f"{c.attribute} → {c.new}" for c in changes)
-            home.log(f"{home.rooms[device.room_id].name} · {device.name}", detail=summary, source="manual")
-        return {"device": device.model_dump(), "changes": [c.to_dict() for c in changes]}
+
+    @app.get("/api/catalog")
+    def get_catalog() -> dict[str, Any]:
+        """Device types and appliance kinds the "Add device" form can offer."""
+        return {
+            "device_types": [{"type": t, "label": DEVICE_TYPE_LABELS[t]} for t in DEVICE_CLASSES],
+            "appliance_kinds": [{"kind": k, "label": label} for k, (label, _) in APPLIANCE_KINDS.items()],
+        }
+
+    @app.post("/api/rooms", status_code=201)
+    def create_room(req: RoomRequest) -> dict[str, Any]:
+        room = _guard(lambda: home.add_room(req.name))
+        return home.room_snapshot(room.id)
+
+    @app.patch("/api/rooms/{room_id}")
+    def update_room(room_id: str, req: RoomRequest) -> dict[str, Any]:
+        _guard(lambda: home.rename_room(room_id, req.name))
+        return home.room_snapshot(room_id)
+
+    @app.delete("/api/rooms/{room_id}")
+    def delete_room(room_id: str) -> dict[str, Any]:
+        removed = _guard(lambda: home.remove_room(room_id))
+        return {"removed_devices": removed}
+
+    @app.post("/api/devices", status_code=201)
+    def create_device(req: NewDeviceRequest) -> dict[str, Any]:
+        if req.type not in DEVICE_CLASSES:
+            raise HTTPException(422, f"Unknown device type {req.type!r}")
+        extra = {"kind": req.kind} if req.type == "appliance" and req.kind else {}
+        device = _guard(lambda: home.add_device(req.type, req.name, req.room_id, **extra))
+        return device.model_dump()
+
+    @app.delete("/api/devices/{device_id}")
+    def delete_device(device_id: str) -> dict[str, Any]:
+        _guard(lambda: home.remove_device(device_id))
+        return {"ok": True}
+
+    @app.patch("/api/devices/{device_id}")
+    def patch_device(device_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Control a device (on, brightness, speed...) or rename/move it (name, room_id)."""
+        if device_id not in home.devices:
+            raise HTTPException(404, f"Unknown device {device_id!r}")
+        structural = {k: updates.pop(k) for k in ("name", "room_id") if k in updates}
+        kind_changed = "kind" in updates and updates["kind"] != getattr(home.devices[device_id], "kind", None)
+
+        def apply() -> list:
+            changes = home.edit_device(device_id, **structural, source="manual") if structural else []
+            changes += home.update_device(device_id, updates, source="manual") if updates else []
+            return changes
+
+        changes = _guard(apply)
+        if kind_changed:
+            home.structure_version += 1  # appliance kind changes the words that match it
+        activity.record(home, device_id, changes, source="manual")
+        return {"device": home.devices[device_id].model_dump(), "changes": [c.to_dict() for c in changes]}
 
     @app.post("/api/command")
     def post_command(req: CommandRequest) -> dict[str, Any]:

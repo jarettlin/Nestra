@@ -20,8 +20,9 @@ class Device {
   double get position => _num(json['position']);
   bool get locked => json['locked'] != false;
   String get mode => (json['mode'] as String?) ?? 'cool';
+  String get kind => (json['kind'] as String?) ?? 'other';
 
-  bool get isPowered => type == 'light' || type == 'fan' || type == 'ac';
+  bool get isPowered => type == 'light' || type == 'fan' || type == 'ac' || type == 'appliance';
 
   /// Whether the device is "doing something" (drives status dots and highlights).
   bool get isActive => switch (type) {
@@ -64,6 +65,21 @@ class Room {
   Room withEnvironment(Environment env) => Room(id: id, name: name, environment: env);
 }
 
+/// One attribute change in an activity entry, e.g. Fan speed: High (85%) -> Medium (55%).
+class ActivityChange {
+  const ActivityChange({required this.label, required this.oldText, required this.newText});
+
+  factory ActivityChange.fromJson(Map<String, dynamic> j) => ActivityChange(
+        label: j['label'] as String? ?? '',
+        oldText: j['old_text'] as String? ?? '',
+        newText: j['new_text'] as String? ?? '',
+      );
+
+  final String label;
+  final String oldText;
+  final String newText;
+}
+
 class ActivityEntry {
   const ActivityEntry({
     required this.id,
@@ -71,6 +87,10 @@ class ActivityEntry {
     required this.title,
     required this.detail,
     required this.source,
+    this.deviceType,
+    this.roomName,
+    this.changes = const [],
+    this.command,
   });
 
   factory ActivityEntry.fromJson(Map<String, dynamic> j) => ActivityEntry(
@@ -79,13 +99,59 @@ class ActivityEntry {
         title: j['title'] as String? ?? '',
         detail: j['detail'] as String? ?? '',
         source: j['source'] as String? ?? 'system',
+        deviceType: j['device_type'] as String?,
+        roomName: j['room_name'] as String?,
+        changes: [
+          for (final c in (j['changes'] as List? ?? [])) ActivityChange.fromJson(c as Map<String, dynamic>),
+        ],
+        command: j['command'] as String?,
       );
 
   final int id;
   final DateTime time;
   final String title;
   final String detail;
-  final String source;
+  final String source; // voice | manual | system | cli
+  final String? deviceType;
+  final String? roomName;
+  final List<ActivityChange> changes;
+  final String? command;
+}
+
+class CatalogItem {
+  const CatalogItem(this.value, this.label);
+  final String value;
+  final String label;
+}
+
+/// What the "Add device" form offers. Mirrors GET /api/catalog.
+class Catalog {
+  const Catalog({required this.deviceTypes, required this.applianceKinds});
+
+  factory Catalog.fromJson(Map<String, dynamic> j) => Catalog(
+        deviceTypes: [
+          for (final t in (j['device_types'] as List)) CatalogItem(t['type'] as String, t['label'] as String),
+        ],
+        applianceKinds: [
+          for (final k in (j['appliance_kinds'] as List)) CatalogItem(k['kind'] as String, k['label'] as String),
+        ],
+      );
+
+  /// Used if the backend can't be asked (keeps the form usable offline).
+  static const fallback = Catalog(
+    deviceTypes: [
+      CatalogItem('light', 'Light'),
+      CatalogItem('fan', 'Fan'),
+      CatalogItem('ac', 'Aircond'),
+      CatalogItem('blinds', 'Blinds'),
+      CatalogItem('lock', 'Door lock'),
+      CatalogItem('appliance', 'Appliance'),
+    ],
+    applianceKinds: [CatalogItem('other', 'Other appliance')],
+  );
+
+  final List<CatalogItem> deviceTypes;
+  final List<CatalogItem> applianceKinds;
 }
 
 class RuleFiring {

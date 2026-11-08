@@ -20,12 +20,15 @@ from .fuzzy.rules import (
     STEP_SIZE,
     TERM_ALIASES,
 )
+from . import activity
 from .nlu import CommandParser, DeviceRef, ParsedCommand, RoomRef
-from .simulator import Blinds, Change, Home, Lock
+from .simulator import Appliance, Blinds, Change, Home, Lock
 from .simulator.devices import DeviceBase
 
 COMFORT_TYPES = ("light", "fan", "ac")
-TYPE_NOUNS = {"light": "light", "fan": "fan", "ac": "AC", "blinds": "blinds", "lock": "lock"}
+TYPE_NOUNS = {
+    "light": "light", "fan": "fan", "ac": "AC", "blinds": "blinds", "lock": "lock", "appliance": "appliance",
+}
 
 
 @dataclass
@@ -70,10 +73,26 @@ class Clarify(Exception):
 class CommandProcessor:
     def __init__(self, home: Home) -> None:
         self.home = home
-        self.parser = CommandParser(
-            rooms=[RoomRef(r.id, [r.name, *r.aliases]) for r in home.rooms.values()],
-            devices=[DeviceRef(d.id, d.name, d.type, d.room_id) for d in home.devices.values()],
-        )
+        self._parser: CommandParser | None = None
+        self._parser_version = -1
+
+    @property
+    def parser(self) -> CommandParser:
+        """Vocabulary comes from the home's rooms and devices; rebuilt when they change."""
+        if self._parser is None or self._parser_version != self.home.structure_version:
+            home = self.home
+            self._parser = CommandParser(
+                rooms=[RoomRef(r.id, [r.name, *r.aliases]) for r in home.rooms.values()],
+                devices=[
+                    DeviceRef(
+                        d.id, d.name, d.type, d.room_id,
+                        aliases=d.aliases() if isinstance(d, Appliance) else [],
+                    )
+                    for d in home.devices.values()
+                ],
+            )
+            self._parser_version = home.structure_version
+        return self._parser
 
     # ------------------------------------------------------------------ entry
     def execute(
@@ -120,9 +139,7 @@ class CommandProcessor:
             replies.append(plan.reply)
             if plan.explanation:
                 explanations.append(plan.explanation)
-            if applied:
-                room = self.home.rooms[plan.device.room_id].name
-                self.home.log(f"{room} · {plan.reply}", detail=f'"{text}"', source=source)
+            activity.record(self.home, plan.device.id, applied, source=source, command=text)
         replies += notes
         reply = " ".join(_sentence(r) for r in replies) or "Nothing to change."
         return CommandResult(True, reply, changes, explanations, parsed)
@@ -134,7 +151,7 @@ class CommandProcessor:
 
     def _resolve(self, cmd: ParsedCommand, room_context: str | None) -> list[DeviceBase]:
         if cmd.device_ids:
-            return [self.home.devices[i] for i in cmd.device_ids]
+            return self._resolve_named(cmd, room_context)
 
         types = cmd.device_types or (list(COMFORT_TYPES) if cmd.term == "comfortable" else [])
         if not types:
@@ -160,6 +177,28 @@ class CommandProcessor:
             where = " and ".join(self.home.rooms[r].name for r in cmd.room_ids) or "the home"
             raise Clarify(f"I couldn't find a {self._noun(cmd)} in {where}.")
         return pool
+
+    def _resolve_named(self, cmd: ParsedCommand, room_context: str | None) -> list[DeviceBase]:
+        """Devices named directly. If one phrase matched devices in several rooms
+        ("the TV" with a TV in two rooms), narrow by room or ask which."""
+        groups = cmd.device_groups or [[i] for i in cmd.device_ids]
+        result: list[DeviceBase] = []
+        for group in groups:
+            devices = [self.home.devices[i] for i in group if i in self.home.devices]
+            rooms = list(dict.fromkeys(d.room_id for d in devices))
+            if len(rooms) > 1 and not cmd.all_scope:
+                if cmd.room_ids:
+                    devices = [d for d in devices if d.room_id in cmd.room_ids] or devices
+                elif any(d.room_id == room_context for d in devices):
+                    devices = [d for d in devices if d.room_id == room_context]
+                else:
+                    names = [self.home.rooms[r].name for r in rooms]
+                    raise Clarify(
+                        f"Which {devices[0].name}? I found one in {_join(names)}.",
+                        [{"room_id": r, "room_name": self.home.rooms[r].name} for r in rooms],
+                    )
+            result += [d for d in devices if d not in result]
+        return result
 
     # --------------------------------------------------------------- planning
     def _plan(self, cmd: ParsedCommand, device: DeviceBase, confirm: bool) -> Plan | str:

@@ -104,11 +104,55 @@ class Lock(DeviceBase):
     POWERED: ClassVar[bool] = False
 
 
+ApplianceKind = Literal[
+    "tv", "kettle", "washer", "dryer", "fridge", "microwave", "coffee", "speaker",
+    "heater", "purifier", "vacuum", "charger", "plug", "other",
+]
+
+# Labels for the UI and extra words people use for each kind ("turn off the television").
+APPLIANCE_KINDS: dict[str, tuple[str, list[str]]] = {
+    "tv": ("TV", ["tv", "television"]),
+    "kettle": ("Kettle", ["kettle"]),
+    "washer": ("Washing machine", ["washing machine", "washer"]),
+    "dryer": ("Dryer", ["dryer", "tumble dryer"]),
+    "fridge": ("Fridge", ["fridge", "refrigerator"]),
+    "microwave": ("Microwave", ["microwave"]),
+    "coffee": ("Coffee machine", ["coffee machine", "coffee maker"]),
+    "speaker": ("Speaker", ["speaker", "speakers", "music"]),
+    "heater": ("Heater", ["heater"]),
+    "purifier": ("Air purifier", ["air purifier", "purifier"]),
+    "vacuum": ("Robot vacuum", ["vacuum", "robot vacuum", "hoover"]),
+    "charger": ("Charger", ["charger"]),
+    "plug": ("Smart plug", ["plug", "socket", "outlet"]),
+    "other": ("Other appliance", []),
+}
+
+
+class Appliance(DeviceBase):
+    """Any other electrical appliance that is simply switched on and off."""
+
+    type: Literal["appliance"] = "appliance"
+    on: bool = False
+    kind: ApplianceKind = "other"
+
+    def aliases(self) -> list[str]:
+        return APPLIANCE_KINDS[self.kind][1]
+
+
 Device = Annotated[
-    Union[Light, Fan, AirConditioner, Blinds, Lock],
+    Union[Light, Fan, AirConditioner, Blinds, Lock, Appliance],
     Field(discriminator="type"),
 ]
 
 DEVICE_CLASSES: dict[str, type[DeviceBase]] = {
-    cls.model_fields["type"].default: cls for cls in (Light, Fan, AirConditioner, Blinds, Lock)
+    cls.model_fields["type"].default: cls for cls in (Light, Fan, AirConditioner, Blinds, Lock, Appliance)
+}
+
+DEVICE_TYPE_LABELS = {
+    "light": "Light",
+    "fan": "Fan",
+    "ac": "Aircond",
+    "blinds": "Blinds",
+    "lock": "Door lock",
+    "appliance": "Appliance",
 }

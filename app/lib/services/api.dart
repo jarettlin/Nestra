@@ -26,6 +26,34 @@ class NestraApi {
     _check(res);
   }
 
+  Future<Catalog> catalog() async {
+    final res = await _send(() => _client.get(apiUri('/api/catalog')));
+    _check(res);
+    return Catalog.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<void> createRoom(String name) async =>
+      _check(await _send(() => _client.post(apiUri('/api/rooms'), headers: _headers, body: jsonEncode({'name': name}))));
+
+  Future<void> renameRoom(String id, String name) async => _check(
+      await _send(() => _client.patch(apiUri('/api/rooms/$id'), headers: _headers, body: jsonEncode({'name': name}))));
+
+  Future<void> deleteRoom(String id) async => _check(await _send(() => _client.delete(apiUri('/api/rooms/$id'))));
+
+  Future<void> createDevice({
+    required String type,
+    required String name,
+    required String roomId,
+    String? kind,
+  }) async =>
+      _check(await _send(() => _client.post(
+            apiUri('/api/devices'),
+            headers: _headers,
+            body: jsonEncode({'type': type, 'name': name, 'room_id': roomId, 'kind': ?kind}),
+          )));
+
+  Future<void> deleteDevice(String id) async => _check(await _send(() => _client.delete(apiUri('/api/devices/$id'))));
+
   Future<CommandResult> command(String text, {String? roomContext, bool confirm = false}) async {
     final res = await _send(
       () => _client.post(

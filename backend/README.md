@@ -35,6 +35,7 @@ Environment variables:
 | `NESTRA_START_HOUR` | now | Start the simulated clock at this hour, e.g. `20.5` |
 | `NESTRA_DEFAULT_ROOM` | `living_room` | Room the wall tablet is in, used when a command names no room |
 | `NESTRA_HOME_CONFIG` | `nestra/data/home.json` | Rooms and devices to simulate |
+| `NESTRA_STATE_FILE` | `var/home.json` | Where your rooms and devices are saved (delete it to reset to the demo home) |
 | `NESTRA_WEB_DIR` | `../app/build/web` | Built Flutter dashboard served at `/` (skipped if missing) |
 
 ## Layout
@@ -47,6 +48,8 @@ nestra/
   fuzzy/rules.py        variables and rule bases: fan / AC / light comfort, relative step size
   nlu/parser.py         rule-based text → ParsedCommand (device, room, action, term, hedge)
   commands.py           pipeline: resolve devices, ask to clarify, run fuzzy, apply changes
+  activity.py           readable before/after activity entries ("Fan speed High (85%) → Low (25%)")
+  store.py              saving the home (local JSON file now; Firestore later)
   main.py               FastAPI REST + WebSocket
   cli.py                console for trying commands
 ```
@@ -59,9 +62,14 @@ REST:
 |---|---|---|
 | GET | `/api/home` | Full snapshot: time, outside weather, rooms with environment and devices, recent activity |
 | GET | `/api/rooms/{id}` | One room |
-| PATCH | `/api/devices/{id}` | Manual control, e.g. `{"on": true, "brightness": 60}` |
+| PATCH | `/api/devices/{id}` | Control, e.g. `{"on": true, "brightness": 60}`, or rename/move: `{"name": "...", "room_id": "..."}` |
+| POST | `/api/devices` | Add a device: `{"type": "appliance", "name": "Kettle", "room_id": "kitchen", "kind": "kettle"}` |
+| DELETE | `/api/devices/{id}` | Remove a device |
+| POST | `/api/rooms` | Add a room: `{"name": "Garage"}` |
+| PATCH / DELETE | `/api/rooms/{id}` | Rename (`{"name": ...}`) or remove a room and its devices |
+| GET | `/api/catalog` | Device types and appliance kinds for the "Add device" form |
 | POST | `/api/command` | `{"text": "...", "room_context"?: "bedroom", "confirm"?: false}` |
-| GET | `/api/activity?limit=20` | Recent Activity feed |
+| GET | `/api/activity?limit=20` | Recent Activity: each entry has `changes` like `{"label": "Fan speed", "old_text": "High (85%)", "new_text": "Low (25%)"}` |
 | GET | `/api/fuzzy` | All fuzzy systems with their variables and rules |
 | POST | `/api/fuzzy/{system}` | Try a system: `{"inputs": {"temperature": 29, "humidity": 70}}` |
 

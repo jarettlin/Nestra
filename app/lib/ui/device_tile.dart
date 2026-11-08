@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../state/home_controller.dart';
 import '../theme.dart';
+import 'manage_dialogs.dart';
 
 /// One device card in the selected room's grid. The control at the bottom
 /// depends on the device type.
@@ -15,7 +16,7 @@ class DeviceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = colorForDevice(device.type);
-    return Container(
+    final tile = Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: NestraColors.card,
@@ -28,7 +29,7 @@ class DeviceTile extends StatelessWidget {
           Row(
             children: [
               _IconBubble(
-                icon: iconForDevice(device.type),
+                icon: iconFor(device),
                 color: accent,
                 active: device.isActive,
                 tooltip: device.isPowered ? (device.on ? 'Turn off' : 'Turn on') : null,
@@ -38,6 +39,18 @@ class DeviceTile extends StatelessWidget {
               ),
               const Spacer(),
               _statusLabel(),
+              const SizedBox(width: 2),
+              SizedBox.square(
+                dimension: 28,
+                child: IconButton(
+                  tooltip: 'Edit device',
+                  padding: EdgeInsets.zero,
+                  iconSize: 16,
+                  color: NestraColors.textMuted,
+                  onPressed: () => showDeviceForm(context, controller, device: device),
+                  icon: const Icon(Icons.more_horiz_rounded),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -52,6 +65,10 @@ class DeviceTile extends StatelessWidget {
         ],
       ),
     );
+    return GestureDetector(
+      onLongPress: () => showDeviceForm(context, controller, device: device),
+      child: tile,
+    );
   }
 
   Widget _statusLabel() {
@@ -60,6 +77,7 @@ class DeviceTile extends StatelessWidget {
       'lock' => device.locked ? 'Locked' : 'Unlocked',
       'ac' => device.on ? formatTemp(device.setpoint) : 'Off',
       'fan' => device.on ? '${device.speed.round()}%' : 'Off',
+      'appliance' => device.on ? 'On' : 'Off',
       _ => null,
     };
     if (text == null) return _Dot(active: device.isActive);
@@ -90,8 +108,71 @@ class DeviceTile extends StatelessWidget {
               onTap: () => toggleLock(context, controller, device),
             ),
           ),
+        'appliance' => Align(
+            alignment: Alignment.centerRight,
+            child: Switch(
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              value: device.on,
+              onChanged: (on) => controller.setDevice(device.id, {'on': on}),
+            ),
+          ),
         _ => const SizedBox.shrink(),
       };
+}
+
+/// Dashed "+ Add device" tile at the end of a room's device grid.
+class AddTile extends StatelessWidget {
+  const AddTile({super.key, required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: CustomPaint(
+            painter: _DashedBorder(),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(color: NestraColors.card, shape: BoxShape.circle),
+                    child: const Icon(Icons.add_rounded, color: NestraColors.purple),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(label, style: const TextStyle(fontSize: 13, color: NestraColors.textSecondary)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+class _DashedBorder extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = NestraColors.border
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(18)));
+    for (final metric in path.computeMetrics()) {
+      for (var d = 0.0; d < metric.length; d += 10) {
+        canvas.drawPath(metric.extractPath(d, d + 5), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// Unlocking asks first; locking doesn't.

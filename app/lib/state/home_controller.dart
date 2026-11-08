@@ -129,6 +129,44 @@ class HomeController extends ChangeNotifier {
     ]);
   }
 
+  // ------------------------------------------------------------ management
+  // These wait for the backend and return an error message (null on success).
+  // The WebSocket then delivers the updated home as a snapshot.
+
+  Catalog? _catalog;
+
+  Future<Catalog> catalog() async {
+    try {
+      return _catalog ??= await api.catalog();
+    } on ApiException {
+      return Catalog.fallback;
+    }
+  }
+
+  Future<String?> _attempt(Future<void> Function() action) async {
+    try {
+      await action();
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    }
+  }
+
+  Future<String?> addRoom(String name) => _attempt(() => api.createRoom(name));
+
+  Future<String?> renameRoom(String id, String name) => _attempt(() => api.renameRoom(id, name));
+
+  Future<String?> removeRoom(String id) => _attempt(() => api.deleteRoom(id));
+
+  Future<String?> addDevice({required String type, required String name, required String roomId, String? kind}) =>
+      _attempt(() => api.createDevice(type: type, name: name, roomId: roomId, kind: kind));
+
+  /// Rename, move to another room, or change an appliance's kind.
+  Future<String?> editDevice(String id, Map<String, dynamic> updates) =>
+      _attempt(() => api.patchDevice(id, updates));
+
+  Future<String?> removeDevice(String id) => _attempt(() => api.deleteDevice(id));
+
   /// Natural-language command. Defaults to the selected room as context, so
   /// "turn on the fan" means the fan in the room you're looking at.
   Future<CommandResult> runCommand(String text, {String? roomContext, bool confirm = false}) async {
