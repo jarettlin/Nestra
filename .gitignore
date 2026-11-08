@@ -9,3 +9,4 @@ backend/var/
 .mcp.json
 firebase-debug.log
 firestore-debug.log
+backend/.env

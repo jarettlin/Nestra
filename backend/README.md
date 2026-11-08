@@ -27,6 +27,13 @@ python3 -m venv .venv
 .venv/bin/python -m pytest                 # tests
 ```
 
+To use Firebase accounts and Firestore: save the service-account key as `var/firebase-admin.json`,
+then `cp .env.example .env` and start with:
+
+```bash
+.venv/bin/uvicorn nestra.main:app --env-file .env
+```
+
 Environment variables:
 
 | Variable | Default | Meaning |

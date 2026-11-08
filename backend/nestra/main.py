@@ -56,7 +56,9 @@ def _env_float(name: str, default: float | None) -> float | None:
 
 
 def _env_path(name: str, default: Path) -> Path:
-    return Path(os.getenv(name, default))
+    """Path setting; relative paths are taken from the backend folder, wherever uvicorn runs."""
+    path = Path(os.getenv(name, default))
+    return path if path.is_absolute() else BACKEND_DIR / path
 
 
 @dataclass
