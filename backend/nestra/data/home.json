@@ -1,0 +1,54 @@
+{
+  "name": "Nestra Demo Home",
+  "weather": { "mean_temperature": 28.0, "amplitude": 4.0, "humidity": 70.0 },
+  "rooms": [
+    {
+      "id": "living_room",
+      "name": "Living Room",
+      "aliases": ["living", "lounge", "family room"],
+      "environment": { "temperature": 27.5, "humidity": 65.0 }
+    },
+    {
+      "id": "bedroom",
+      "name": "Bedroom",
+      "aliases": ["bed room", "master bedroom"],
+      "environment": { "temperature": 26.0, "humidity": 60.0 }
+    },
+    {
+      "id": "office",
+      "name": "Office",
+      "aliases": ["study", "work room"],
+      "environment": { "temperature": 26.5, "humidity": 55.0 }
+    },
+    {
+      "id": "kitchen",
+      "name": "Kitchen",
+      "aliases": [],
+      "environment": { "temperature": 28.0, "humidity": 60.0 }
+    },
+    {
+      "id": "entrance",
+      "name": "Entrance",
+      "aliases": ["hallway", "entry"],
+      "environment": { "temperature": 28.0, "humidity": 68.0 }
+    }
+  ],
+  "devices": [
+    { "id": "living_main_ceiling", "type": "light", "name": "Main Ceiling", "room_id": "living_room", "on": true, "brightness": 80 },
+    { "id": "living_reading_lamp", "type": "light", "name": "Reading Lamp", "room_id": "living_room", "on": true, "brightness": 40 },
+    { "id": "living_air_circulator", "type": "fan", "name": "Air Circulator", "room_id": "living_room", "on": true, "speed": 85 },
+    { "id": "living_window_shades", "type": "blinds", "name": "Window Shades", "room_id": "living_room", "position": 0 },
+
+    { "id": "bedroom_ceiling_light", "type": "light", "name": "Ceiling Light", "room_id": "bedroom", "on": false, "brightness": 60 },
+    { "id": "bedroom_ceiling_fan", "type": "fan", "name": "Ceiling Fan", "room_id": "bedroom", "on": false, "speed": 40 },
+    { "id": "bedroom_ac", "type": "ac", "name": "Bedroom AC", "room_id": "bedroom", "on": false, "setpoint": 25, "mode": "cool" },
+
+    { "id": "office_desk_lamp", "type": "light", "name": "Desk Lamp", "room_id": "office", "on": true, "brightness": 75 },
+    { "id": "office_desk_fan", "type": "fan", "name": "Desk Fan", "room_id": "office", "on": false, "speed": 30 },
+    { "id": "office_ac", "type": "ac", "name": "Office AC", "room_id": "office", "on": true, "setpoint": 24, "mode": "cool" },
+
+    { "id": "kitchen_lights", "type": "light", "name": "Kitchen Lights", "room_id": "kitchen", "on": false, "brightness": 90 },
+
+    { "id": "front_door", "type": "lock", "name": "Front Door", "room_id": "entrance", "locked": true }
+  ]
+}
