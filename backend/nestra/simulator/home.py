@@ -190,6 +190,7 @@ class Home:
         return {
             "name": self.name,
             "time": self.clock.now().isoformat(timespec="seconds"),
+            "time_scale": self.clock.scale,  # simulated seconds per real second
             "outside": {
                 "temperature": round(self.outside_temperature(), 1),
                 "humidity": round(self.weather.humidity, 1),

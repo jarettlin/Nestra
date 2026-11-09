@@ -97,7 +97,29 @@ def decode_audio(data: bytes):
             chunks.append(out.to_ndarray().reshape(-1))
     if not chunks:
         return np.zeros(0, dtype=np.float32)
-    return np.concatenate(chunks).astype(np.float32) / 32768.0
+    return normalize(np.concatenate(chunks).astype(np.float32) / 32768.0)
+
+
+TARGET_PEAK = 0.9
+MAX_GAIN = 20.0  # up to +26 dB, so speech from across the room is loud enough for Whisper
+
+
+def normalize(samples):
+    """Boost quiet recordings (speaking from further away) to a steady level.
+
+    Gain is capped so a recording of near-silence doesn't turn into loud noise.
+    """
+    import numpy as np
+
+    if samples.size == 0:
+        return samples
+    peak = float(np.max(np.abs(samples)))
+    if peak <= 0:
+        return samples
+    gain = min(TARGET_PEAK / peak, MAX_GAIN)
+    if gain <= 1:
+        return samples
+    return np.clip(samples * gain, -1.0, 1.0).astype(np.float32)
 
 
 def vocabulary_hint(home: Home) -> str:

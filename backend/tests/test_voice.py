@@ -63,3 +63,16 @@ def test_decode_audio_handles_wav():
     samples = decode_audio(buf.getvalue())
     assert samples.dtype == np.float32
     assert 15000 <= len(samples) <= 17000  # 1 s resampled to 16 kHz
+
+
+def test_quiet_recordings_are_boosted_but_capped():
+    import numpy as np
+
+    from nestra.voice import MAX_GAIN, TARGET_PEAK, normalize
+
+    quiet = np.array([0.0, 0.05, -0.1], dtype=np.float32)
+    assert np.isclose(np.max(np.abs(normalize(quiet))), TARGET_PEAK)
+    hiss = np.array([0.001, -0.001], dtype=np.float32)
+    assert np.isclose(np.max(np.abs(normalize(hiss))), 0.001 * MAX_GAIN)
+    loud = np.array([0.95, -0.5], dtype=np.float32)
+    assert np.array_equal(normalize(loud), loud)

@@ -23,6 +23,17 @@ class HomeController extends ChangeNotifier {
   bool loaded = false;
   String homeName = '';
   DateTime? time;
+  double timeScale = 1;
+  DateTime _timeReceived = DateTime.now();
+
+  /// The home's clock right now. The simulator can run faster than real time
+  /// (timeScale), so this runs on from the last snapshot at the same speed.
+  DateTime? get now {
+    final t = time;
+    if (t == null) return null;
+    final realMs = DateTime.now().difference(_timeReceived).inMilliseconds;
+    return t.add(Duration(milliseconds: (realMs * timeScale).round()));
+  }
   double outsideTemperature = 0;
   List<Room> rooms = [];
   final Map<String, Device> devices = {};
@@ -81,6 +92,8 @@ class HomeController extends ChangeNotifier {
   void _applySnapshot(Map<String, dynamic> snap) {
     homeName = snap['name'] as String? ?? '';
     time = DateTime.tryParse(snap['time'] as String? ?? '');
+    timeScale = (snap['time_scale'] as num?)?.toDouble() ?? 1;
+    _timeReceived = DateTime.now();
     outsideTemperature = ((snap['outside'] as Map?)?['temperature'] as num?)?.toDouble() ?? 0;
     final roomList = (snap['rooms'] as List).cast<Map<String, dynamic>>();
     rooms = [
@@ -126,6 +139,19 @@ class HomeController extends ChangeNotifier {
     await Future.wait([
       for (final d in devicesIn(roomId))
         if (d.isPowered && d.on != on) setDevice(d.id, {'on': on}),
+    ]);
+  }
+
+  /// Powered devices (lights, fans, airconds, appliances) across every room.
+  List<Device> get poweredDevices => devices.values.where((d) => d.isPowered).toList();
+
+  bool get anythingOn => poweredDevices.any((d) => d.on);
+
+  /// The whole-home switch: everything on or everything off.
+  Future<void> setAllPower(bool on) async {
+    await Future.wait([
+      for (final d in poweredDevices)
+        if (d.on != on) setDevice(d.id, {'on': on}),
     ]);
   }
 

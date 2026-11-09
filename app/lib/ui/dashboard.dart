@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -113,7 +115,13 @@ class _DashboardState extends State<Dashboard> {
           ],
         ),
         const SizedBox(height: 28),
-        const _SectionTitle('Rooms'),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Expanded(child: _SectionTitle('Rooms')),
+            _AllRoomsSwitch(controller: c),
+          ],
+        ),
         GridView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -147,7 +155,7 @@ class _Header extends StatelessWidget {
   }
 
   String _greeting() {
-    final hour = (controller.time ?? DateTime.now()).hour;
+    final hour = (controller.now ?? DateTime.now()).hour;
     final part = hour < 5
         ? 'Good night'
         : hour < 12
@@ -192,9 +200,17 @@ class _Header extends StatelessWidget {
                   ],
                 ),
               ),
+              if (narrow) ...[
+                const SizedBox(height: 10),
+                HomeClock(controller: controller, compact: true),
+              ],
             ],
           ),
         ),
+        if (!narrow) ...[
+          HomeClock(controller: controller),
+          const SizedBox(width: 22),
+        ],
         Tooltip(
           message: 'Give a command',
           child: Material(
@@ -310,4 +326,133 @@ class _Connecting extends StatelessWidget {
           ],
         ),
       );
+}
+
+
+/// Date and time on the home's clock, ticking every second.
+class HomeClock extends StatefulWidget {
+  const HomeClock({super.key, required this.controller, this.compact = false});
+
+  final HomeController controller;
+  final bool compact;
+
+  @override
+  State<HomeClock> createState() => _HomeClockState();
+}
+
+class _HomeClockState extends State<HomeClock> {
+  late final Timer _timer;
+
+  static const _days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  static const _months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = widget.controller.now ?? DateTime.now();
+    final time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final date = '${_days[now.weekday - 1]}, ${now.day} ${_months[now.month - 1]} ${now.year}';
+    final scale = widget.controller.timeScale;
+    final speed = scale == 1
+        ? null
+        : Tooltip(
+            message: 'The simulated home runs ${_scaleText(scale)} faster than real time '
+                '(NESTRA_TIME_SCALE). Timers and history use this clock.',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: NestraColors.purple.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${_scaleText(scale)} speed',
+                style: const TextStyle(fontSize: 10.5, color: NestraColors.purple, fontWeight: FontWeight.w600),
+              ),
+            ),
+          );
+    if (widget.compact) {
+      return Row(
+        children: [
+          Text(time, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              '${_days[now.weekday - 1].substring(0, 3)}, ${now.day} ${_months[now.month - 1].substring(0, 3)}',
+              style: const TextStyle(fontSize: 13, color: NestraColors.textSecondary),
+            ),
+          ),
+          if (speed != null) ...[const SizedBox(width: 8), speed],
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          time,
+          style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w300, height: 1.15, letterSpacing: 1),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (speed != null) ...[speed, const SizedBox(width: 8)],
+            Text(date, style: const TextStyle(fontSize: 13, color: NestraColors.textSecondary)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  static String _scaleText(double s) => s == s.roundToDouble() ? '${s.round()}×' : '${s.toStringAsFixed(1)}×';
+}
+
+/// Whole-home power: on if anything is on; switching it off turns off every
+/// light, fan, aircond and appliance in every room.
+class _AllRoomsSwitch extends StatelessWidget {
+  const _AllRoomsSwitch({required this.controller});
+  final HomeController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final devices = controller.poweredDevices;
+    if (devices.isEmpty) return const SizedBox.shrink();
+    final onCount = devices.where((d) => d.on).length;
+    final anyOn = onCount > 0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            anyOn ? 'All rooms · $onCount on' : 'All rooms · off',
+            style: const TextStyle(fontSize: 13, color: NestraColors.textSecondary),
+          ),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: anyOn ? 'Turn off everything in every room' : 'Turn on everything in every room',
+            child: Switch(
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              value: anyOn,
+              onChanged: controller.setAllPower,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

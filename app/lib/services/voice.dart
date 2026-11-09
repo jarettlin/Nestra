@@ -32,7 +32,7 @@ class VoiceRecorder {
   final level = ValueNotifier<double>(0);
 
   static const sampleRate = 16000;
-  static const _speechDb = -38.0; // louder than this counts as talking
+  static const _speechDb = -45.0; // louder than this counts as talking (low enough for across the room)
   static const _silenceAfterSpeech = Duration(milliseconds: 1400);
 
   StreamSubscription<Uint8List>? _audio;
@@ -51,6 +51,7 @@ class VoiceRecorder {
       encoder: AudioEncoder.pcm16bits,
       numChannels: 1,
       sampleRate: sampleRate,
+      autoGain: true, // the browser/OS raises the level when you're further away
       echoCancel: true,
       noiseSuppress: true,
     ));

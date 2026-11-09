@@ -49,6 +49,18 @@ class DeviceTile extends StatelessWidget {
                 ),
               _statusLabel(),
               const SizedBox(width: 2),
+              if (device.isPowered)
+                SizedBox.square(
+                  dimension: 28,
+                  child: IconButton(
+                    tooltip: device.on ? 'Turn off' : 'Turn on',
+                    padding: EdgeInsets.zero,
+                    iconSize: 17,
+                    color: device.on ? NestraColors.green : NestraColors.textMuted,
+                    onPressed: () => controller.setDevice(device.id, {'on': !device.on}),
+                    icon: const Icon(Icons.power_settings_new_rounded),
+                  ),
+                ),
               SizedBox.square(
                 dimension: 28,
                 child: IconButton(
