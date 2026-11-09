@@ -218,6 +218,7 @@ class CommandResult {
     this.woke = false,
     this.listen = false,
     this.command,
+    this.end = false,
   });
 
   factory CommandResult.fromJson(Map<String, dynamic> j) => CommandResult(
@@ -237,6 +238,7 @@ class CommandResult {
         woke: j['woke'] == true,
         listen: j['listen'] == true,
         command: j['command'] as String?,
+        end: j['end'] == true,
       );
 
   final bool ok;
@@ -257,4 +259,7 @@ class CommandResult {
 
   /// The command that was run: the transcript minus any "Hi Nestra".
   final String? command;
+
+  /// "Thank you" / "that's all": the hands-free conversation is over.
+  final bool end;
 }

@@ -87,6 +87,14 @@ DECREASE = (
     r"slower|cooler|colder|less|slow down)\b"
 )
 ALL_SCOPE = r"\b(all|every|everywhere|whole house|entire house)\b"
+# "Everything" with no device type named: every light, fan, aircond and appliance.
+EVERYTHING = (
+    r"\b(everything|every ?thing|every device|all (?:the |my |of the )?(?:devices|appliances|electronics|"
+    r"stuff|things)|all of (?:it|them)|all)\b"
+)
+EVERYTHING_TYPES = ["light", "fan", "ac", "appliance"]
+THIS_ROOM = r"\b(this room|in here|here|current room|the room i'?m in)\b"
+SWITCH_OFF_WORDS = r"\b(close|shut|kill)\b|\b(?:shut|power|switch|turn)\s+(?:\w+\s+)?(?:down|off)\b"
 PRONOUN = r"\b(it|them|that|those)\b"
 CLAUSE_SPLIT = re.compile(
     r"\s*(?:,\s*and then|,\s*then|\band then\b|\bthen\b|;|"
@@ -132,6 +140,8 @@ class ParsedCommand:
     timer_action: str | None = None  # "on" | "off" | "cancel"
     timer_minutes: float | None = None
     timer_at: str | None = None
+    everything: bool = False  # "turn off everything": all powered devices in scope
+    this_room: bool = False  # "in here", "this room": the room the tablet shows
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -265,6 +275,12 @@ class CommandParser:
             types = list(dict.fromkeys(d.type for d in devices))
         rooms = self._match_rooms(clause)
         all_scope = bool(re.search(ALL_SCOPE, clause))
+        this_room = not rooms and bool(re.search(THIS_ROOM, clause))
+        everything = not types and not devices and bool(re.search(EVERYTHING, clause))
+        if everything:
+            types = list(EVERYTHING_TYPES)
+            # "turn off everything" = the whole home; "everything in here" = this room.
+            all_scope = not rooms and not this_room
 
         value, delta = self._numbers(clause)
         term = self._term(clause)
@@ -304,6 +320,8 @@ class CommandParser:
             rooms = rooms or list(previous.room_ids)
 
         action = self._action(clause, types, value, delta, term)
+        if everything and action in (None, "decrease") and re.search(SWITCH_OFF_WORDS, clause):
+            action = "off"  # "close everything", "shut everything down"
         if attribute and action not in ("increase", "decrease", "off"):
             action = "set"
 
@@ -330,6 +348,8 @@ class CommandParser:
             device_groups=device_groups,
             room_ids=rooms,
             all_scope=all_scope,
+            everything=everything,
+            this_room=this_room,
             value=value,
             delta=delta,
             term=term,

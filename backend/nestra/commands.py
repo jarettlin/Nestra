@@ -118,6 +118,13 @@ class CommandProcessor:
             for cmd in parsed:
                 if cmd.action is None:
                     raise Clarify(f"What should I do with the {self._noun(cmd)}?")
+                if cmd.everything and cmd.action in ("on", "off"):
+                    summary = self._plan_everything(cmd, room_context)
+                    if isinstance(summary, str):
+                        notes.append(summary)
+                    else:
+                        plans += summary
+                    continue
                 for device in self._resolve(cmd, room_context):
                     plan_or_note = self._plan(cmd, device, confirm)
                     if isinstance(plan_or_note, Plan):
@@ -138,13 +145,33 @@ class CommandProcessor:
         for plan in plans:
             applied = self.home.update_device(plan.device.id, plan.updates, source=source)
             changes += applied
-            replies.append(plan.reply)
+            if plan.reply:
+                replies.append(plan.reply)
             if plan.explanation:
                 explanations.append(plan.explanation)
             activity.record(self.home, plan.device.id, applied, source=source, command=text)
         replies += notes
         reply = " ".join(_sentence(r) for r in replies) or "Nothing to change."
         return CommandResult(True, reply, changes, explanations, parsed)
+
+    def _plan_everything(self, cmd: ParsedCommand, room_context: str | None) -> list[Plan] | str:
+        """'Turn off everything (in here)': switch whatever isn't already, with one summary reply."""
+        on = cmd.action == "on"
+        devices = [d for d in self._resolve(cmd, room_context) if isinstance(d, PoweredDevice)]
+        room_ids = list(dict.fromkeys(d.room_id for d in devices))
+        if cmd.all_scope or len(room_ids) > 1:
+            where = "across the home"
+        else:
+            where = f"in the {self.home.rooms[room_ids[0]].name}" if room_ids else ""
+        todo = [d for d in devices if d.on != on]
+        if not todo:
+            return f"Everything {where} is already {cmd.action}".replace("  ", " ")
+        plans = [Plan(d, {"on": on}, "") for d in todo]
+        if len(todo) == 1:
+            plans[0].reply = self._with_room(todo[0], f"{todo[0].name} turned {cmd.action}")
+        else:
+            plans[0].reply = f"Turned {cmd.action} {len(todo)} devices {where}".strip()
+        return plans
 
     def _with_room(self, device: DeviceBase, text: str) -> str:
         """'Aircond turned on' -> 'Bedroom Aircond turned on' when another room has an 'Aircond' too."""
@@ -172,6 +199,8 @@ class CommandProcessor:
 
         if cmd.room_ids:
             pool = [d for d in pool if d.room_id in cmd.room_ids]
+        elif cmd.this_room and room_context:
+            pool = [d for d in pool if d.room_id == room_context]
         elif not cmd.all_scope:
             here = [d for d in pool if d.room_id == room_context]
             if here:
@@ -186,7 +215,10 @@ class CommandProcessor:
                     )
 
         if not pool:
-            where = " and ".join(self.home.rooms[r].name for r in cmd.room_ids) or "the home"
+            room_ids = cmd.room_ids or ([room_context] if cmd.this_room and room_context else [])
+            where = " and ".join(self.home.rooms[r].name for r in room_ids if r in self.home.rooms) or "the home"
+            if cmd.everything:
+                raise Clarify(f"There's nothing to switch in {where}.")
             raise Clarify(f"I couldn't find a {self._noun(cmd)} in {where}.")
         return pool
 

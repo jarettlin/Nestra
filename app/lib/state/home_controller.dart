@@ -208,9 +208,19 @@ class HomeController extends ChangeNotifier {
     required String filename,
     required String mimeType,
     bool wake = false,
+    bool conversation = false,
+    String? previous,
   }) async {
     try {
-      return await api.voice(audio, filename: filename, mimeType: mimeType, roomContext: selectedRoomId, wake: wake);
+      return await api.voice(
+        audio,
+        filename: filename,
+        mimeType: mimeType,
+        roomContext: selectedRoomId,
+        wake: wake,
+        conversation: conversation,
+        previous: previous,
+      );
     } on ApiException catch (e) {
       return CommandResult(ok: false, reply: e.message);
     }

@@ -73,3 +73,20 @@ def test_api_and_websocket(tmp_path):
             while "command_result" not in seen:
                 seen.add(ws.receive_json()["type"])
             assert "device" in seen
+
+
+def test_everything_in_this_room_and_whole_home():
+    from nestra.commands import CommandProcessor
+    from nestra.simulator import Home, SimClock
+    from nestra.simulator.home import DEFAULT_CONFIG
+
+    home = Home.from_file(DEFAULT_CONFIG, clock=SimClock.at_hour(14, scale=0))
+    cp = CommandProcessor(home)
+    r = cp.execute("turn off everything in here", room_context="bedroom")
+    assert r.ok and "in the Bedroom" in r.reply
+    assert all(not d.on for d in home.devices.values() if d.room_id == "bedroom" and hasattr(d, "on"))
+    assert any(d.on for d in home.devices.values() if d.room_id != "bedroom" and hasattr(d, "on"))
+    again = cp.execute("turn off everything in here", room_context="bedroom")
+    assert again.ok and "already off" in again.reply and not again.changes
+    r = cp.execute("shut down everything", room_context="bedroom")
+    assert r.ok and all(not d.on for d in home.devices.values() if hasattr(d, "on"))

@@ -106,7 +106,7 @@ class WakeListener {
 
   final Future<void> Function(Uint8List wav) onSpeech;
 
-  final _recorder = AudioRecorder();
+  late final _recorder = AudioRecorder(); // created on first use (keeps tests off the plugin)
   final _segmenter = SpeechSegmenter();
   StreamSubscription<Uint8List>? _audio;
   bool _handling = false;
@@ -115,6 +115,9 @@ class WakeListener {
   final level = ValueNotifier<double>(0);
 
   bool get running => _audio != null;
+
+  /// Someone is talking right now (a burst of speech is being collected).
+  bool get hearingSpeech => _segmenter.inSpeech;
 
   Future<bool> hasPermission() => _recorder.hasPermission();
 

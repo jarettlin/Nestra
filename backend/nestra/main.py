@@ -45,6 +45,7 @@ from .simulator.devices import APPLIANCE_KINDS, DEVICE_CLASSES, DEVICE_TYPE_LABE
 from .simulator.home import DEFAULT_CONFIG, Environment, HomeConfig, Room
 from .store import FirestoreStore, HomeStore, JsonFileStore
 from .voice import SpeechToText, vocabulary_hint
+from . import replies
 from .wake import split_wake
 
 # A child of uvicorn's logger, so these lines show in the server output.
@@ -270,6 +271,14 @@ def create_app(
         room = req.room_context or (settings.default_room if settings.default_room in home.rooms else None)
         return session.processor.execute(req.text, room_context=room, confirm=req.confirm, source=source).to_dict()
 
+    def _answered_room(session: HomeSession, text: str) -> str | None:
+        """'The bedroom one' / 'kitchen' -> that room's id, if the answer is only a room."""
+        parser = session.processor.parser
+        rooms = parser._match_rooms(text.lower())
+        parsed = parser.parse(text)
+        names_device = any(p.device_ids or (p.device_types and p.action) for p in parsed)
+        return rooms[0] if len(rooms) == 1 and not names_device else None
+
     def guard(fn):
         """Map model errors to HTTP errors."""
         try:
@@ -384,12 +393,16 @@ def create_app(
         room_context: str | None = Form(None),
         confirm: bool = Form(False),
         wake: bool = Form(False, description="Hands-free: act only if it starts with \"Hi Nestra\""),
+        conversation: bool = Form(False, description="Follow-up in a hands-free conversation: no wake phrase needed"),
+        previous: str | None = Form(None, description="Command Nestra just asked about (which room? / go ahead?)"),
         s: HomeSession = Depends(current_session),
     ) -> dict[str, Any]:
         """Spoken command: transcribe with Whisper, then run it like /api/command.
 
         With wake=true (hands-free listening) speech without the wake phrase is
         ignored; "Hi Nestra" alone asks the app to listen for the command.
+        With conversation=true (just after a reply) no wake phrase is needed,
+        and "thank you" / "that's all" ends the conversation (end=true).
         """
         data = audio.file.read(MAX_AUDIO_BYTES + 1)
         if not data:
@@ -401,7 +414,7 @@ def create_app(
         except Exception as e:
             raise HTTPException(422, "Couldn't read that recording. Please try again.") from e
         woke = split_wake(heard.text)
-        if wake and not woke.heard:
+        if wake and not conversation and not woke.heard:
             # Ordinary conversation near the mic: drop it, and keep it out of the logs.
             log.info("Wake: %d bytes, no wake phrase (%.2fs)", len(data), heard.seconds)
             return {"ok": False, "woke": False, "reply": "", "transcript_seconds": round(heard.seconds, 2)}
@@ -409,12 +422,24 @@ def create_app(
         extra = {"transcript": heard.text, "transcribe_seconds": round(heard.seconds, 2), "woke": woke.heard}
         # "Hi Nestra, turn on the fan" works in push-to-talk too.
         command = woke.command if woke.heard else heard.text
+        hands_free = wake or conversation
         if not command.strip(" .,!?"):
             if woke.heard:
-                return {"ok": True, "listen": True, "reply": "Yes?", **extra}
+                return {"ok": True, "listen": True, "reply": replies.wake_reply(), **extra}
             return {"ok": False, "reply": "I didn't catch that. Please try again.", **extra}
+        if previous:
+            # Answering Nestra's question: "yes" / "no", or a room for "which fan?".
+            if replies.is_yes(command):
+                command, confirm = previous, True
+            elif replies.is_no(command):
+                return {"ok": True, "reply": replies.declined(), **extra, "command": command}
+            elif room := _answered_room(s, command):
+                command, room_context = previous, room
+        if hands_free and replies.is_goodbye(command):
+            return {"ok": True, "end": True, "reply": replies.goodbye(), **extra, "command": command}
         req = CommandRequest(text=command, room_context=room_context, confirm=confirm)
-        return {**run_command(s, req, source="voice"), **extra, "command": command}
+        result = replies.friendly(run_command(s, req, source="voice"), follow_up=hands_free)
+        return {**result, **extra, "command": command}
 
     @app.get("/api/activity")
     def get_activity(limit: int = 20, s: HomeSession = Depends(current_session)) -> list[dict[str, Any]]:

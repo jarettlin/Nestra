@@ -108,9 +108,60 @@ def test_hands_free_ignores_speech_without_wake_phrase(tmp_path):
 def test_hands_free_wake_then_command(tmp_path):
     with _client(tmp_path, FakeSpeech("Hi Nestra.")) as client:
         body = client.post("/api/voice", data={"wake": "true"}, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
-        assert body["woke"] and body["listen"] and body["reply"] == "Yes?"
+        assert body["woke"] and body["listen"] and body["reply"]
     speech = FakeSpeech("Hey Nestra, turn off the reading lamp")
     with _client(tmp_path, speech) as client:
         body = client.post("/api/voice", data={"wake": "true"}, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
         assert body["woke"] and body["ok"] and body["command"] == "turn off the reading lamp"
         assert not client.get("/api/devices/living_reading_lamp").json()["on"]
+
+
+def test_conversation_needs_no_wake_phrase_and_ends_on_thanks(tmp_path):
+    speech = FakeSpeech("turn off the reading lamp")
+    with _client(tmp_path, speech) as client:
+        form = {"wake": "true", "conversation": "true"}
+        body = client.post("/api/voice", data=form, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["ok"] and not body.get("end")
+        assert not client.get("/api/devices/living_reading_lamp").json()["on"]
+        for bye in ["Thank you.", "No, that's all.", "That's it, thanks", "Nothing else", "I'm good", "Okay thanks Nestra"]:
+            speech.text = bye
+            body = client.post("/api/voice", data=form, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+            assert body["end"] and body["reply"], bye
+
+
+def test_goodbye_detection():
+    from nestra.replies import is_goodbye
+
+    for text in ["thanks", "Thank you so much", "that's all", "No thanks", "Nope, that's it.", "goodbye", "never mind"]:
+        assert is_goodbye(text), text
+    for text in ["turn off the lights", "thanks, now turn off the fan", "all lights off", "stop the fan"]:
+        assert not is_goodbye(text), text
+
+
+def test_friendly_replies_vary_but_keep_the_facts():
+    from nestra.replies import friendly
+
+    seen = set()
+    for _ in range(40):
+        reply = friendly({"ok": True, "reply": "Main Light turned on."}, follow_up=True)["reply"]
+        assert "Main Light" in reply and "on" in reply
+        seen.add(reply)
+    assert len(seen) > 5
+    failed = {"ok": False, "reply": "Which room?"}
+    assert friendly(failed)["reply"] == "Which room?"
+
+
+def test_answering_nestras_questions_by_voice(tmp_path):
+    speech = FakeSpeech("the bedroom")
+    with _client(tmp_path, speech) as client:
+        form = {"conversation": "true", "previous": "turn on the light"}
+        body = client.post("/api/voice", data=form, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["ok"] and "Ceiling Light" in body["reply"], body  # the bedroom's light
+        speech.text = "yes please"
+        form = {"conversation": "true", "previous": "unlock the front door"}
+        body = client.post("/api/voice", data=form, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["ok"] and not client.get("/api/devices/front_door").json()["locked"]
+        speech.text = "no"
+        form = {"conversation": "true", "previous": "turn on the bedroom fan"}
+        body = client.post("/api/voice", data=form, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["ok"] and "changes" not in body  # declined: nothing run

@@ -51,3 +51,27 @@ def test_compound_command_inherits_target(parser):
 
 def test_nonsense_parses_to_nothing(parser):
     assert parser.parse("hello there") == []
+
+
+def test_everything_commands():
+    from nestra.nlu import CommandParser, DeviceRef, RoomRef
+
+    p = CommandParser(
+        rooms=[RoomRef("bedroom", ["Bedroom"]), RoomRef("kitchen", ["Kitchen"])],
+        devices=[DeviceRef("bedroom_fan", "Ceiling Fan", "fan", "bedroom")],
+    )
+    cases = {
+        "turn off everything": ("off", True, False, []),
+        "close everything": ("off", True, False, []),
+        "shut down everything": ("off", True, False, []),
+        "turn on everything in this room": ("on", False, True, []),
+        "switch everything off in the bedroom": ("off", False, False, ["bedroom"]),
+        "turn on all the devices in here": ("on", False, True, []),
+        "turn off all": ("off", True, False, []),
+    }
+    for text, (action, whole_home, this_room, rooms) in cases.items():
+        [cmd] = p.parse(text)
+        assert cmd.everything and cmd.action == action, text
+        assert cmd.all_scope == whole_home and cmd.this_room == this_room and cmd.room_ids == rooms, text
+    [lights] = p.parse("turn off all lights")
+    assert not lights.everything and lights.device_types == ["light"]

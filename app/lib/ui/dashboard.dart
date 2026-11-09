@@ -4,12 +4,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../config.dart';
-import '../models.dart';
 import '../state/hands_free.dart';
 import '../state/home_controller.dart';
 import '../theme.dart';
 import 'activity_panel.dart';
 import 'command_dialog.dart';
+import 'conversation_bar.dart';
 import 'device_tile.dart';
 import 'manage_dialogs.dart';
 import 'room_card.dart';
@@ -26,10 +26,7 @@ class Dashboard extends StatefulWidget {
 
 class _DashboardState extends State<Dashboard> {
   HomeController get c => widget.controller;
-  late final HandsFree handsFree = HandsFree(c)
-    ..openCommand = _openFromHandsFree
-    ..showResult = _showHeard
-    ..addListener(_showHandsFreeError);
+  late final HandsFree handsFree = HandsFree(c)..addListener(_showHandsFreeError);
 
   @override
   void initState() {
@@ -42,23 +39,6 @@ class _DashboardState extends State<Dashboard> {
     c.removeListener(_showErrors);
     handsFree.dispose();
     super.dispose();
-  }
-
-  Future<void> _openFromHandsFree(CommandResult? result) async {
-    if (!mounted) return;
-    Navigator.of(context).popUntil((route) => route.isFirst); // close any other dialog first
-    await showCommandDialog(context, c, result: result);
-  }
-
-  void _showHeard(CommandResult result) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      duration: const Duration(seconds: 5),
-      content: Text.rich(TextSpan(children: [
-        TextSpan(text: '“${result.command ?? result.transcript ?? ''}”\n', style: const TextStyle(fontWeight: FontWeight.w600)),
-        TextSpan(text: result.reply),
-      ])),
-    ));
   }
 
   void _showHandsFreeError() {
@@ -80,7 +60,23 @@ class _DashboardState extends State<Dashboard> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: ListenableBuilder(
+        child: Stack(
+          children: [
+            Positioned.fill(child: _content()),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 20,
+              child: Center(child: ConversationBar(handsFree: handsFree, controller: c)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _content() {
+    return ListenableBuilder(
           listenable: c,
           builder: (context, _) {
             if (!c.loaded) return _Connecting(online: c.online, user: widget.user);
@@ -118,9 +114,7 @@ class _DashboardState extends State<Dashboard> {
               },
             );
           },
-        ),
-      ),
-    );
+        );
   }
 
   Widget _main(BuildContext context) {
@@ -508,6 +502,7 @@ class _HandsFreeButton extends StatelessWidget {
             HandsFreeStatus.off => 'Hands-free: say “Hi Nestra”',
             HandsFreeStatus.starting => 'Starting the microphone…',
             HandsFreeStatus.listening => 'Listening for “Hi Nestra”. Tap to stop',
+            HandsFreeStatus.conversing => 'In a conversation. Tap to turn hands-free off',
             HandsFreeStatus.thinking => 'Working on it…',
           };
           return Tooltip(
