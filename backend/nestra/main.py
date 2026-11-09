@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -44,6 +45,9 @@ from .simulator.devices import APPLIANCE_KINDS, DEVICE_CLASSES, DEVICE_TYPE_LABE
 from .simulator.home import DEFAULT_CONFIG, Environment, HomeConfig, Room
 from .store import FirestoreStore, HomeStore, JsonFileStore
 from .voice import SpeechToText, vocabulary_hint
+
+# A child of uvicorn's logger, so these lines show in the server output.
+log = logging.getLogger("uvicorn.error.nestra")
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024  # ~10 minutes of compressed speech; commands are a few seconds
 
@@ -390,6 +394,7 @@ def create_app(
             heard = speech.transcribe(data, hint=vocabulary_hint(s.home))
         except Exception as e:
             raise HTTPException(422, "Couldn't read that recording. Please try again.") from e
+        log.info("Voice: %d bytes (%s) -> %r in %.2fs", len(data), audio.content_type, heard.text, heard.seconds)
         extra = {"transcript": heard.text, "transcribe_seconds": round(heard.seconds, 2)}
         if not heard.text.strip(" .,!?"):
             return {"ok": False, "reply": "I didn't catch that. Please try again.", **extra}

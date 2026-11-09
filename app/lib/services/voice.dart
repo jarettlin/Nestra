@@ -1,10 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:record/record.dart';
-
-import 'read_bytes.dart';
 
 /// A finished recording, ready to upload to /api/voice.
 class Recording {
@@ -15,6 +15,10 @@ class Recording {
 }
 
 /// Records one spoken command from the microphone.
+///
+/// The raw 16 kHz samples are streamed straight into memory and wrapped as a
+/// WAV file, the format Whisper wants anyway. This avoids the browser's
+/// MediaRecorder and blob URLs (Safari kept handing back the first recording).
 ///
 /// Stops by itself shortly after you stop talking (or after [maxLength]),
 /// so you can just speak and wait.
@@ -27,29 +31,36 @@ class VoiceRecorder {
   /// Microphone loudness while recording, 0 (silent) to 1 (loud), for the animation.
   final level = ValueNotifier<double>(0);
 
-  StreamSubscription<Amplitude>? _amplitude;
-  Timer? _limit;
-  Completer<void>? _autoStop;
-  AudioEncoder _encoder = AudioEncoder.opus;
-
+  static const sampleRate = 16000;
   static const _speechDb = -38.0; // louder than this counts as talking
   static const _silenceAfterSpeech = Duration(milliseconds: 1400);
+
+  StreamSubscription<Uint8List>? _audio;
+  BytesBuilder? _pcm;
+  Timer? _limit;
+  Completer<void>? _autoStop;
 
   Future<bool> hasPermission() => _recorder.hasPermission();
 
   /// Starts recording. The returned future completes when it stops by itself.
   Future<void> start() async {
-    _encoder = await _pickEncoder();
-    await _recorder.start(
-      RecordConfig(encoder: _encoder, numChannels: 1, sampleRate: 16000, echoCancel: true, noiseSuppress: true),
-      path: kIsWeb ? '' : '${DateTime.now().millisecondsSinceEpoch}.${_extension(_encoder)}',
-    );
+    await cancel();
+    final pcm = _pcm = BytesBuilder(copy: false);
     final done = _autoStop = Completer<void>();
+    final stream = await _recorder.startStream(const RecordConfig(
+      encoder: AudioEncoder.pcm16bits,
+      numChannels: 1,
+      sampleRate: sampleRate,
+      echoCancel: true,
+      noiseSuppress: true,
+    ));
     var heardSpeech = false;
     DateTime? quietSince;
-    _amplitude = _recorder.onAmplitudeChanged(const Duration(milliseconds: 120)).listen((a) {
-      level.value = ((a.current + 60) / 60).clamp(0.0, 1.0);
-      if (a.current > _speechDb) {
+    _audio = stream.listen((chunk) {
+      pcm.add(Uint8List.fromList(chunk)); // copy: the plugin may reuse its buffer
+      final db = _peakDb(chunk);
+      level.value = ((db + 60) / 60).clamp(0.0, 1.0);
+      if (db > _speechDb) {
         heardSpeech = true;
         quietSince = null;
       } else if (heardSpeech) {
@@ -65,53 +76,77 @@ class VoiceRecorder {
     return done.future;
   }
 
-  /// Stops recording and returns the audio (null if nothing was recorded).
+  /// Stops recording and returns the audio as WAV (null if nothing was recorded).
   Future<Recording?> stop() async {
-    _limit?.cancel();
-    await _amplitude?.cancel();
-    _amplitude = null;
-    level.value = 0;
-    if (_autoStop != null && !_autoStop!.isCompleted) _autoStop!.complete();
-    final path = await _recorder.stop();
-    if (path == null || path.isEmpty) return null;
-    final bytes = await readRecording(path);
-    if (bytes.isEmpty) return null;
-    return Recording(bytes, _mime(_encoder), 'command.${_extension(_encoder)}');
+    _finish();
+    await _recorder.stop();
+    await _audio?.cancel();
+    _audio = null;
+    final pcm = _pcm?.takeBytes();
+    _pcm = null;
+    if (pcm == null || pcm.isEmpty) return null;
+    return Recording(wav(pcm, sampleRate: sampleRate), 'audio/wav', 'command.wav');
   }
 
   Future<void> cancel() async {
-    _limit?.cancel();
-    await _amplitude?.cancel();
-    _amplitude = null;
-    level.value = 0;
+    _finish();
+    await _audio?.cancel();
+    _audio = null;
+    _pcm = null;
     if (await _recorder.isRecording()) await _recorder.cancel();
   }
 
-  Future<AudioEncoder> _pickEncoder() async {
-    // Opus/WebM in Chrome-based browsers, AAC in Safari, WAV as a last resort.
-    for (final e in [AudioEncoder.opus, AudioEncoder.aacLc, AudioEncoder.wav]) {
-      if (await _recorder.isEncoderSupported(e)) return e;
-    }
-    return AudioEncoder.wav;
+  void _finish() {
+    _limit?.cancel();
+    level.value = 0;
+    if (_autoStop != null && !_autoStop!.isCompleted) _autoStop!.complete();
   }
 
-  static String _extension(AudioEncoder e) => switch (e) {
-        AudioEncoder.opus => kIsWeb ? 'webm' : 'ogg',
-        AudioEncoder.aacLc => 'm4a',
-        _ => 'wav',
-      };
-
-  static String _mime(AudioEncoder e) => switch (e) {
-        AudioEncoder.opus => kIsWeb ? 'audio/webm' : 'audio/ogg',
-        AudioEncoder.aacLc => 'audio/mp4',
-        _ => 'audio/wav',
-      };
+  /// Loudest sample in a chunk of 16-bit little-endian PCM, in dBFS (-60 = silence).
+  static double _peakDb(Uint8List chunk) {
+    final data = ByteData.sublistView(chunk);
+    var peak = 0;
+    for (var i = 0; i + 1 < chunk.length; i += 2) {
+      final v = data.getInt16(i, Endian.little).abs();
+      if (v > peak) peak = v;
+    }
+    if (peak == 0) return -60;
+    return 20 * math.log(peak / 32768) / math.ln10;
+  }
 
   Future<void> dispose() async {
     await cancel();
     await _recorder.dispose();
     level.dispose();
   }
+}
+
+/// Wraps mono 16-bit PCM samples in a WAV header.
+Uint8List wav(Uint8List pcm, {required int sampleRate}) {
+  final header = ByteData(44);
+  void text(int at, String s) {
+    for (var i = 0; i < s.length; i++) {
+      header.setUint8(at + i, s.codeUnitAt(i));
+    }
+  }
+
+  text(0, 'RIFF');
+  header.setUint32(4, 36 + pcm.length, Endian.little);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  header.setUint32(16, 16, Endian.little); // fmt chunk size
+  header.setUint16(20, 1, Endian.little); // PCM
+  header.setUint16(22, 1, Endian.little); // mono
+  header.setUint32(24, sampleRate, Endian.little);
+  header.setUint32(28, sampleRate * 2, Endian.little); // bytes per second
+  header.setUint16(32, 2, Endian.little); // bytes per sample frame
+  header.setUint16(34, 16, Endian.little); // bits per sample
+  text(36, 'data');
+  header.setUint32(40, pcm.length, Endian.little);
+  return (BytesBuilder(copy: false)
+        ..add(header.buffer.asUint8List())
+        ..add(pcm))
+      .takeBytes();
 }
 
 /// Speaks replies out loud with the device's built-in voices.
