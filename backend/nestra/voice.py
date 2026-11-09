@@ -127,6 +127,6 @@ def vocabulary_hint(home: Home) -> str:
     rooms = ", ".join(r.name for r in home.rooms.values())
     devices = ", ".join(sorted({d.name for d in home.devices.values()}))
     return (
-        f"Smart home commands for Nestra. Rooms: {rooms}. Devices: {devices}. "
+        f"Hi Nestra. Smart home commands for Nestra. Rooms: {rooms}. Devices: {devices}. "
         "Turn on the aircond, set the fan to low, make it comfortable, a bit cooler."
     )

@@ -59,7 +59,7 @@ class VoiceRecorder {
     DateTime? quietSince;
     _audio = stream.listen((chunk) {
       pcm.add(Uint8List.fromList(chunk)); // copy: the plugin may reuse its buffer
-      final db = _peakDb(chunk);
+      final db = peakDb(chunk);
       level.value = ((db + 60) / 60).clamp(0.0, 1.0);
       if (db > _speechDb) {
         heardSpeech = true;
@@ -103,23 +103,23 @@ class VoiceRecorder {
     if (_autoStop != null && !_autoStop!.isCompleted) _autoStop!.complete();
   }
 
-  /// Loudest sample in a chunk of 16-bit little-endian PCM, in dBFS (-60 = silence).
-  static double _peakDb(Uint8List chunk) {
-    final data = ByteData.sublistView(chunk);
-    var peak = 0;
-    for (var i = 0; i + 1 < chunk.length; i += 2) {
-      final v = data.getInt16(i, Endian.little).abs();
-      if (v > peak) peak = v;
-    }
-    if (peak == 0) return -60;
-    return 20 * math.log(peak / 32768) / math.ln10;
-  }
-
   Future<void> dispose() async {
     await cancel();
     await _recorder.dispose();
     level.dispose();
   }
+}
+
+/// Loudest sample in a chunk of 16-bit little-endian PCM, in dBFS (-60 = silence).
+double peakDb(Uint8List chunk) {
+  final data = ByteData.sublistView(chunk);
+  var peak = 0;
+  for (var i = 0; i + 1 < chunk.length; i += 2) {
+    final v = data.getInt16(i, Endian.little).abs();
+    if (v > peak) peak = v;
+  }
+  if (peak == 0) return -60;
+  return math.max(-60, 20 * math.log(peak / 32768) / math.ln10);
 }
 
 /// Wraps mono 16-bit PCM samples in a WAV header.
@@ -165,6 +165,7 @@ class Speaker {
     if (muted.value || text.trim().isEmpty) return;
     try {
       if (!_ready) {
+        await _tts.awaitSpeakCompletion(true); // say() returns once it has finished talking
         await _tts.setLanguage('en-US');
         await _tts.setSpeechRate(kIsWeb ? 1.0 : 0.5);
         _ready = true;

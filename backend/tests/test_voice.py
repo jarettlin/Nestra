@@ -76,3 +76,41 @@ def test_quiet_recordings_are_boosted_but_capped():
     assert np.isclose(np.max(np.abs(normalize(hiss))), 0.001 * MAX_GAIN)
     loud = np.array([0.95, -0.5], dtype=np.float32)
     assert np.array_equal(normalize(loud), loud)
+
+
+def test_wake_phrase_variants():
+    from nestra.wake import split_wake
+
+    for text, command in [
+        ("Hi Nestra, turn on the fan.", "turn on the fan."),
+        ("Hey, Nestra. Make it cooler", "Make it cooler"),
+        ("Hi Nestor turn off the lights", "turn off the lights"),
+        ("Hinestra, dim the lights", "dim the lights"),
+        ("Hi, Ness tra.", ""),
+        ("Nestra, close the blinds", "close the blinds"),
+        ("Okay Nestra", ""),
+    ]:
+        w = split_wake(text)
+        assert w.heard and w.command == command, text
+    for text in ["Turn on the fan", "Hi mom, how are you", "That's extra", "I like Nestor", "Pass the remote", ""]:
+        assert not split_wake(text).heard, text
+
+
+def test_hands_free_ignores_speech_without_wake_phrase(tmp_path):
+    with _client(tmp_path, FakeSpeech("Turn off the reading lamp.")) as client:
+        before = client.get("/api/devices/living_reading_lamp").json()["on"]
+        body = client.post("/api/voice", data={"wake": "true"}, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["woke"] is False and "transcript" not in body
+        assert client.get("/api/devices/living_reading_lamp").json()["on"] == before
+        assert len(client.get("/api/activity").json()) <= 1  # nothing logged
+
+
+def test_hands_free_wake_then_command(tmp_path):
+    with _client(tmp_path, FakeSpeech("Hi Nestra.")) as client:
+        body = client.post("/api/voice", data={"wake": "true"}, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["woke"] and body["listen"] and body["reply"] == "Yes?"
+    speech = FakeSpeech("Hey Nestra, turn off the reading lamp")
+    with _client(tmp_path, speech) as client:
+        body = client.post("/api/voice", data={"wake": "true"}, files={"audio": ("a.wav", b"x", "audio/wav")}).json()
+        assert body["woke"] and body["ok"] and body["command"] == "turn off the reading lamp"
+        assert not client.get("/api/devices/living_reading_lamp").json()["on"]

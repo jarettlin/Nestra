@@ -45,6 +45,7 @@ from .simulator.devices import APPLIANCE_KINDS, DEVICE_CLASSES, DEVICE_TYPE_LABE
 from .simulator.home import DEFAULT_CONFIG, Environment, HomeConfig, Room
 from .store import FirestoreStore, HomeStore, JsonFileStore
 from .voice import SpeechToText, vocabulary_hint
+from .wake import split_wake
 
 # A child of uvicorn's logger, so these lines show in the server output.
 log = logging.getLogger("uvicorn.error.nestra")
@@ -382,9 +383,14 @@ def create_app(
         audio: UploadFile = File(..., description="Recorded speech (webm, ogg, mp4/m4a, wav...)"),
         room_context: str | None = Form(None),
         confirm: bool = Form(False),
+        wake: bool = Form(False, description="Hands-free: act only if it starts with \"Hi Nestra\""),
         s: HomeSession = Depends(current_session),
     ) -> dict[str, Any]:
-        """Spoken command: transcribe with Whisper, then run it like /api/command."""
+        """Spoken command: transcribe with Whisper, then run it like /api/command.
+
+        With wake=true (hands-free listening) speech without the wake phrase is
+        ignored; "Hi Nestra" alone asks the app to listen for the command.
+        """
         data = audio.file.read(MAX_AUDIO_BYTES + 1)
         if not data:
             raise HTTPException(422, "No audio received")
@@ -394,12 +400,21 @@ def create_app(
             heard = speech.transcribe(data, hint=vocabulary_hint(s.home))
         except Exception as e:
             raise HTTPException(422, "Couldn't read that recording. Please try again.") from e
+        woke = split_wake(heard.text)
+        if wake and not woke.heard:
+            # Ordinary conversation near the mic: drop it, and keep it out of the logs.
+            log.info("Wake: %d bytes, no wake phrase (%.2fs)", len(data), heard.seconds)
+            return {"ok": False, "woke": False, "reply": "", "transcript_seconds": round(heard.seconds, 2)}
         log.info("Voice: %d bytes (%s) -> %r in %.2fs", len(data), audio.content_type, heard.text, heard.seconds)
-        extra = {"transcript": heard.text, "transcribe_seconds": round(heard.seconds, 2)}
-        if not heard.text.strip(" .,!?"):
+        extra = {"transcript": heard.text, "transcribe_seconds": round(heard.seconds, 2), "woke": woke.heard}
+        # "Hi Nestra, turn on the fan" works in push-to-talk too.
+        command = woke.command if woke.heard else heard.text
+        if not command.strip(" .,!?"):
+            if woke.heard:
+                return {"ok": True, "listen": True, "reply": "Yes?", **extra}
             return {"ok": False, "reply": "I didn't catch that. Please try again.", **extra}
-        req = CommandRequest(text=heard.text, room_context=room_context, confirm=confirm)
-        return {**run_command(s, req, source="voice"), **extra}
+        req = CommandRequest(text=command, room_context=room_context, confirm=confirm)
+        return {**run_command(s, req, source="voice"), **extra, "command": command}
 
     @app.get("/api/activity")
     def get_activity(limit: int = 20, s: HomeSession = Depends(current_session)) -> list[dict[str, Any]]:

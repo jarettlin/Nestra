@@ -215,6 +215,9 @@ class CommandResult {
     this.options = const [],
     this.explanations = const [],
     this.transcript,
+    this.woke = false,
+    this.listen = false,
+    this.command,
   });
 
   factory CommandResult.fromJson(Map<String, dynamic> j) => CommandResult(
@@ -231,6 +234,9 @@ class CommandResult {
             Explanation.fromJson(e as Map<String, dynamic>),
         ],
         transcript: j['transcript'] as String?,
+        woke: j['woke'] == true,
+        listen: j['listen'] == true,
+        command: j['command'] as String?,
       );
 
   final bool ok;
@@ -242,4 +248,13 @@ class CommandResult {
 
   /// What Whisper heard, for voice commands.
   final String? transcript;
+
+  /// Hands-free: the speech started with "Hi Nestra".
+  final bool woke;
+
+  /// "Hi Nestra" with no command yet: listen for the command next.
+  final bool listen;
+
+  /// The command that was run: the transcript minus any "Hi Nestra".
+  final String? command;
 }

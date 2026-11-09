@@ -16,19 +16,27 @@ const _examples = [
 ];
 
 /// Opens the command box. With [listen], it starts recording straight away (the mic button).
-Future<void> showCommandDialog(BuildContext context, HomeController controller, {bool listen = true}) => showDialog(
+/// [result] opens it on a spoken follow-up instead ("Which room?"), from hands-free mode.
+Future<void> showCommandDialog(
+  BuildContext context,
+  HomeController controller, {
+  bool listen = true,
+  CommandResult? result,
+}) =>
+    showDialog(
       context: context,
-      builder: (_) => CommandDialog(controller: controller, listenOnOpen: listen),
+      builder: (_) => CommandDialog(controller: controller, listenOnOpen: listen && result == null, initialResult: result),
     );
 
 /// Speak or type a command. Voice is recorded here, transcribed by the backend
 /// (Whisper), and the reply is spoken back. Handles the backend's follow-ups:
 /// "which room?" and "are you sure?".
 class CommandDialog extends StatefulWidget {
-  const CommandDialog({super.key, required this.controller, this.listenOnOpen = false});
+  const CommandDialog({super.key, required this.controller, this.listenOnOpen = false, this.initialResult});
 
   final HomeController controller;
   final bool listenOnOpen;
+  final CommandResult? initialResult;
 
   @override
   State<CommandDialog> createState() => _CommandDialogState();
@@ -47,6 +55,13 @@ class _CommandDialogState extends State<CommandDialog> {
   @override
   void initState() {
     super.initState();
+    final first = widget.initialResult;
+    if (first != null) {
+      _result = first;
+      _spoken = true;
+      _lastCommand = first.command ?? first.transcript ?? '';
+      _text.text = first.transcript ?? '';
+    }
     if (widget.listenOnOpen) WidgetsBinding.instance.addPostFrameCallback((_) => _listen());
   }
 
@@ -130,7 +145,7 @@ class _CommandDialogState extends State<CommandDialog> {
       _result = result;
       if (heard.isNotEmpty) {
         _text.text = heard;
-        _lastCommand = heard;
+        _lastCommand = result.command ?? heard; // without "Hi Nestra", for follow-ups
       }
     });
     Speaker.instance.say(result.reply);

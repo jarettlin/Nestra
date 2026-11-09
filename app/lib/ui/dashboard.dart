@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../config.dart';
+import '../models.dart';
+import '../state/hands_free.dart';
 import '../state/home_controller.dart';
 import '../theme.dart';
 import 'activity_panel.dart';
@@ -24,6 +26,10 @@ class Dashboard extends StatefulWidget {
 
 class _DashboardState extends State<Dashboard> {
   HomeController get c => widget.controller;
+  late final HandsFree handsFree = HandsFree(c)
+    ..openCommand = _openFromHandsFree
+    ..showResult = _showHeard
+    ..addListener(_showHandsFreeError);
 
   @override
   void initState() {
@@ -34,7 +40,33 @@ class _DashboardState extends State<Dashboard> {
   @override
   void dispose() {
     c.removeListener(_showErrors);
+    handsFree.dispose();
     super.dispose();
+  }
+
+  Future<void> _openFromHandsFree(CommandResult? result) async {
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst); // close any other dialog first
+    await showCommandDialog(context, c, result: result);
+  }
+
+  void _showHeard(CommandResult result) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 5),
+      content: Text.rich(TextSpan(children: [
+        TextSpan(text: '“${result.command ?? result.transcript ?? ''}”\n', style: const TextStyle(fontWeight: FontWeight.w600)),
+        TextSpan(text: result.reply),
+      ])),
+    ));
+  }
+
+  void _showHandsFreeError() {
+    final message = handsFree.error;
+    if (message != null && mounted) {
+      handsFree.error = null;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
   }
 
   void _showErrors() {
@@ -97,7 +129,7 @@ class _DashboardState extends State<Dashboard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _Header(controller: c, user: widget.user),
+        _Header(controller: c, handsFree: handsFree, user: widget.user),
         const SizedBox(height: 28),
         _SectionTitle(room.name),
         GridView(
@@ -143,9 +175,10 @@ class _DashboardState extends State<Dashboard> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.controller, this.user});
+  const _Header({required this.controller, required this.handsFree, this.user});
 
   final HomeController controller;
+  final HandsFree handsFree;
   final User? user;
 
   String get _firstName {
@@ -211,6 +244,8 @@ class _Header extends StatelessWidget {
           HomeClock(controller: controller),
           const SizedBox(width: 22),
         ],
+        _HandsFreeButton(handsFree: handsFree),
+        const SizedBox(width: 10),
         Tooltip(
           message: 'Give a command',
           child: Material(
@@ -218,7 +253,7 @@ class _Header extends StatelessWidget {
             shape: const CircleBorder(),
             child: InkWell(
               customBorder: const CircleBorder(),
-              onTap: () => showCommandDialog(context, controller),
+              onTap: () => handsFree.pauseWhile(() => showCommandDialog(context, controller)),
               child: const Padding(
                 padding: EdgeInsets.all(14),
                 child: Icon(Icons.mic_rounded, color: Colors.white),
@@ -455,4 +490,67 @@ class _AllRoomsSwitch extends StatelessWidget {
       ),
     );
   }
+}
+
+
+/// Turns "Hi Nestra" hands-free listening on and off. Glows with your voice while listening.
+class _HandsFreeButton extends StatelessWidget {
+  const _HandsFreeButton({required this.handsFree});
+  final HandsFree handsFree;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: handsFree,
+        builder: (context, _) {
+          final status = handsFree.status;
+          final on = handsFree.enabled;
+          final tooltip = switch (status) {
+            HandsFreeStatus.off => 'Hands-free: say “Hi Nestra”',
+            HandsFreeStatus.starting => 'Starting the microphone…',
+            HandsFreeStatus.listening => 'Listening for “Hi Nestra”. Tap to stop',
+            HandsFreeStatus.thinking => 'Working on it…',
+          };
+          return Tooltip(
+            message: tooltip,
+            child: ValueListenableBuilder<double>(
+              valueListenable: handsFree.level,
+              builder: (context, level, child) => AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    if (on)
+                      BoxShadow(
+                        color: NestraColors.green.withValues(alpha: 0.35),
+                        blurRadius: 6 + 18 * level,
+                        spreadRadius: 4 * level,
+                      ),
+                  ],
+                ),
+                child: child,
+              ),
+              child: Material(
+                color: on ? NestraColors.green.withValues(alpha: 0.18) : NestraColors.cardRaised,
+                shape: CircleBorder(side: BorderSide(color: on ? NestraColors.green : NestraColors.border)),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: status == HandsFreeStatus.starting ? null : handsFree.toggle,
+                  child: Padding(
+                    padding: const EdgeInsets.all(13),
+                    child: status == HandsFreeStatus.thinking || status == HandsFreeStatus.starting
+                        ? const SizedBox.square(
+                            dimension: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: NestraColors.green),
+                          )
+                        : Icon(
+                            on ? Icons.hearing_rounded : Icons.hearing_disabled_rounded,
+                            color: on ? NestraColors.green : NestraColors.textSecondary,
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
 }

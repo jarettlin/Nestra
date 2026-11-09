@@ -32,6 +32,13 @@ locally with Whisper, runs the command and the reply is spoken back (mute with
 the speaker icon). Use a real browser such as Safari or Chrome and allow
 microphone access; the Claude app's built-in browser pane blocks the microphone.
 
+**Hands-free ("Hi Nestra"):** tap the ear button next to the mic. The mic stays
+open and each burst of speech (never silence) is sent to the local backend,
+which transcribes it and acts only if it starts with "Hi Nestra" / "Hey Nestra".
+Say "Hi Nestra" and wait for "Yes?", or say it all at once: "Hi Nestra, turn on
+the kitchen light". Everything else is discarded and not logged. Keep the tab
+open and in front: browsers pause the mic in background tabs.
+
 ## Sign-in (Firebase Auth)
 
 The app opens on a login screen (email/password or Google) and sends the user's

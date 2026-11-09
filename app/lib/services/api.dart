@@ -65,10 +65,12 @@ class NestraApi {
     required String filename,
     required String mimeType,
     String? roomContext,
+    bool wake = false,
   }) async {
     final request = http.MultipartRequest('POST', apiUri('/api/voice'))
       ..files.add(http.MultipartFile.fromBytes('audio', audio, filename: filename, contentType: _mediaType(mimeType)));
     if (roomContext != null) request.fields['room_context'] = roomContext;
+    if (wake) request.fields['wake'] = 'true';
     final http.Response res;
     try {
       // Generous timeout: the first request may wait for the speech model to load.

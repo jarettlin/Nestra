@@ -203,9 +203,14 @@ class HomeController extends ChangeNotifier {
     }
   }
 
-  Future<CommandResult> runVoice(List<int> audio, {required String filename, required String mimeType}) async {
+  Future<CommandResult> runVoice(
+    List<int> audio, {
+    required String filename,
+    required String mimeType,
+    bool wake = false,
+  }) async {
     try {
-      return await api.voice(audio, filename: filename, mimeType: mimeType, roomContext: selectedRoomId);
+      return await api.voice(audio, filename: filename, mimeType: mimeType, roomContext: selectedRoomId, wake: wake);
     } on ApiException catch (e) {
       return CommandResult(ok: false, reply: e.message);
     }
