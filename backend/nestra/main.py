@@ -47,7 +47,23 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_WEB_DIR = BACKEND_DIR.parent / "app" / "build" / "web"
 DEFAULT_STATE_FILE = BACKEND_DIR / "var" / "home.json"
 DEFAULT_CREDENTIALS = BACKEND_DIR / "var" / "firebase-admin.json"
-STARTER_ROOMS = ("Living Room", "Bedroom", "Kitchen")
+# What a new user's home starts with: room -> [(type, name, extra attributes)].
+STARTER_HOME: dict[str, list[tuple[str, str, dict[str, Any]]]] = {
+    "Living Room": [
+        ("light", "Main Light", {"brightness": 80}),
+        ("fan", "Ceiling Fan", {"speed": 40}),
+        ("ac", "Aircond", {"setpoint": 25}),
+    ],
+    "Bedroom": [
+        ("light", "Main Light", {"brightness": 60}),
+        ("fan", "Ceiling Fan", {"speed": 30}),
+        ("ac", "Aircond", {"setpoint": 26}),
+    ],
+    "Kitchen": [
+        ("light", "Main Light", {"brightness": 90}),
+        ("fan", "Ceiling Fan", {"speed": 40}),
+    ],
+}
 
 
 def _env_float(name: str, default: float | None) -> float | None:
@@ -102,7 +118,7 @@ class RoomRequest(BaseModel):
 
 class NewDeviceRequest(BaseModel):
     type: str = Field(examples=["appliance"])
-    name: str = Field(min_length=1, max_length=40, examples=["Kettle"])
+    name: str = Field("", max_length=40, examples=["Kettle"], description="Blank = a default like \"Aircond\" or \"TV\"")
     room_id: str = Field(examples=["kitchen"])
     kind: str | None = Field(None, description="Appliance kind, e.g. tv, kettle (appliances only)")
 
@@ -117,16 +133,26 @@ def _demo_config(settings: Settings) -> HomeConfig:
 
 
 def _starter_config(settings: Settings) -> HomeConfig:
+    """Common rooms with the usual devices, all switched off, ready to use or rename."""
     weather = _demo_config(settings).weather
-    rooms = [
-        Room(
-            id=name.lower().replace(" ", "_"),
-            name=name,
-            environment=Environment(temperature=weather.mean_temperature - 1, humidity=weather.humidity - 5),
+    rooms, devices = [], []
+    for room_name, room_devices in STARTER_HOME.items():
+        room_id = room_name.lower().replace(" ", "_")
+        rooms.append(
+            Room(
+                id=room_id,
+                name=room_name,
+                environment=Environment(temperature=weather.mean_temperature - 1, humidity=weather.humidity - 5),
+            )
         )
-        for name in STARTER_ROOMS
-    ]
-    return HomeConfig(name="My Home", weather=weather, rooms=rooms, devices=[])
+        for device_type, name, extra in room_devices:
+            slug = name.lower().replace(" ", "_")
+            devices.append(
+                {"id": f"{room_id}_{slug}", "type": device_type, "name": name, "room_id": room_id, **extra}
+            )
+    return HomeConfig.model_validate(
+        {"name": "My Home", "weather": weather.model_dump(), "rooms": [r.model_dump() for r in rooms], "devices": devices}
+    )
 
 
 def _build_auth(settings: Settings) -> Authenticator:

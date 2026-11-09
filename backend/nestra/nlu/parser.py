@@ -24,11 +24,37 @@ DEVICE_KEYWORDS: dict[str, list[str]] = {
     "light": ["lights", "light", "lamps", "lamp", "lighting", "brightness", "bulbs", "bulb"],
     "ac": [
         "air conditioning", "air conditioner", "air con", "aircon", "ac",
-        "thermostat", "temperature", "aircond",
+        "thermostat", "temperature", "aircond", "air cond", "aircond unit",
     ],
     "blinds": ["window shades", "shades", "shade", "blinds", "blind", "curtains", "curtain"],
     "lock": ["front door", "door", "lock"],
 }
+
+_AC_WORDS = r"ac|aircond|air cond|aircon|air con|air conditioner|air conditioning"
+# "the aircond fan", "aircond's fan speed", "fan speed of the ac"
+AC_FAN = re.compile(
+    rf"\b(?:{_AC_WORDS})(?:'s)?\s+fan(?:\s+speed)?\b|\bfan\s+speed\s+(?:of|on|for)\s+the\s+(?:{_AC_WORDS})\b"
+)
+AC_FAN_LEVELS = {
+    "auto": "auto", "automatic": "auto", "low": "low", "quiet": "low", "min": "low", "minimum": "low",
+    "medium": "medium", "mid": "medium", "middle": "medium", "high": "high", "max": "high",
+    "maximum": "high", "turbo": "high", "powerful": "high", "full": "high",
+}
+AC_MODE_WORDS = {
+    "cool": "cool", "cooling": "cool", "dry": "dry", "dehumidify": "dry", "dehumidifying": "dry",
+    "heat": "heat", "heating": "heat", "fan": "fan", "fan only": "fan", "auto": "auto", "automatic": "auto",
+}
+_MODE_ALT = "|".join(sorted(AC_MODE_WORDS, key=len, reverse=True))
+AC_MODE = re.compile(
+    rf"\b(?P<a>{_MODE_ALT})\s+mode\b|\bmode\s+(?:to\s+)?(?P<b>{_MODE_ALT})\b|\b(?P<c>dehumidify|dehumidifying)\b"
+)
+
+# Timers: "in 2 hours", "after 30 minutes", "for an hour", "at 7am", "at 22:30".
+_AMOUNT = r"(?P<n>\d+(?:\.\d+)?|an?|one|half an)"
+_UNIT = r"(?P<unit>hours?|hrs?|h|minutes?|mins?|m)"
+TIMER_RELATIVE = re.compile(rf"\b(?P<rel>in|after|for)\s+{_AMOUNT}\s*{_UNIT}\b")
+TIMER_AT = re.compile(r"\bat\s+(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ampm>am|pm|a m|p m)?\b")
+TIMER_CANCEL = re.compile(r"\b(cancel|clear|remove|stop|delete)\b.*\btimers?\b|\bno\s+timers?\b")
 
 # Words that imply a device when none is named ("make it brighter").
 IMPLIED_TYPES: list[tuple[str, str]] = [
@@ -99,6 +125,13 @@ class ParsedCommand:
     delta: float | None = None  # relative number: "increase by 10"
     term: str | None = None  # linguistic target: "comfortable", "low", "dim", ...
     hedge: str | None = None  # "small" | "large" | None (moderate)
+    # Which setting to change; None = the device's main level (brightness, speed, setpoint).
+    attribute: str | None = None  # "fan_speed" | "mode"
+    setting: str | None = None  # value for that attribute: "high", "dry", ...
+    # Timer: switch on/off later, either after some minutes or at a clock time ("HH:MM").
+    timer_action: str | None = None  # "on" | "off" | "cancel"
+    timer_minutes: float | None = None
+    timer_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,7 +216,35 @@ class CommandParser:
         return found
 
     # ---------------------------------------------------------------- clauses
+    @staticmethod
+    def _extract_timer(clause: str) -> tuple[str, dict[str, Any]]:
+        """Pull a timer phrase out of the clause so its numbers aren't read as levels."""
+        if TIMER_CANCEL.search(clause):
+            rest = re.sub(r"\b(cancel|clear|remove|stop|delete|no|timers?)\b", " ", clause)
+            return " ".join(rest.split()), {"cancel": True}
+        m = TIMER_RELATIVE.search(clause)
+        if m:
+            n = m["n"]
+            amount = {"a": 1, "an": 1, "one": 1, "half an": 0.5}.get(n)
+            amount = float(n) if amount is None else amount
+            minutes = amount * 60 if m["unit"].startswith("h") else amount
+            rest = (clause[: m.start()] + " " + clause[m.end() :]).strip()
+            return rest, {"minutes": minutes, "during": m["rel"] == "for"}
+        m = TIMER_AT.search(clause)
+        if m and (m["ampm"] or m["m"]):
+            hour, minute = int(m["h"]), int(m["m"] or 0)
+            ampm = (m["ampm"] or "").replace(" ", "")
+            if ampm == "pm" and hour < 12:
+                hour += 12
+            if ampm == "am" and hour == 12:
+                hour = 0
+            if hour < 24 and minute < 60:
+                rest = (clause[: m.start()] + " " + clause[m.end() :]).strip()
+                return rest, {"at": f"{hour:02d}:{minute:02d}"}
+        return clause, {}
+
     def _parse_clause(self, clause: str, previous: ParsedCommand | None) -> ParsedCommand | None:
+        clause, timer = self._extract_timer(clause)
         matches = self._match_devices(clause)
         types = self._match_types(clause)
         if types:
@@ -208,6 +269,26 @@ class CommandParser:
         value, delta = self._numbers(clause)
         term = self._term(clause)
         hedge = self._hedge(clause)
+
+        # Aircond settings other than temperature: its fan speed and its mode.
+        attribute = setting = None
+        if AC_FAN.search(clause):
+            attribute = "fan_speed"
+            setting = next((lvl for w, lvl in AC_FAN_LEVELS.items() if re.search(rf"\b{w}\b", clause)), None)
+        else:
+            mode = AC_MODE.search(clause)
+            if mode:
+                attribute = "mode"
+                setting = AC_MODE_WORDS[mode["a"] or mode["b"] or "dry"]
+        if attribute:
+            term = None if attribute == "mode" or setting else term
+            value = None
+            # "aircond fan" / "fan mode" mean the aircond, not a ceiling fan.
+            ac_devices = [d for d in devices if d.type == "ac"]
+            devices = ac_devices
+            groups = {p: [i for i in ids if any(d.id == i for d in ac_devices)] for p, ids in groups.items()}
+            groups = {p: ids for p, ids in groups.items() if ids}
+            types = ["ac"]
         if not types:
             types = [t for pattern, t in IMPLIED_TYPES if re.search(pattern, clause)][:1]
         if not types and value is not None and re.search(r"\bdegrees?\b", clause):
@@ -223,6 +304,22 @@ class CommandParser:
             rooms = rooms or list(previous.room_ids)
 
         action = self._action(clause, types, value, delta, term)
+        if attribute and action not in ("increase", "decrease", "off"):
+            action = "set"
+
+        timer_action = timer_minutes = timer_at = None
+        if timer.get("cancel"):
+            timer_action, action = "cancel", "timer"
+        elif timer and action in ("on", "off"):
+            timer_minutes, timer_at = timer.get("minutes"), timer.get("at")
+            if timer.get("during"):
+                # "turn on the fan for 30 minutes": on now, off later.
+                timer_action = "off" if action == "on" else "on"
+            else:
+                timer_action, action = action, "timer"
+        elif timer:
+            timer_action = "unsupported"  # e.g. "set to 24 degrees at 10pm"
+
         if action is None and not types and term is None:
             return None
         return ParsedCommand(
@@ -237,6 +334,11 @@ class CommandParser:
             delta=delta,
             term=term,
             hedge=hedge,
+            attribute=attribute,
+            setting=setting,
+            timer_action=timer_action,
+            timer_minutes=timer_minutes,
+            timer_at=timer_at,
         )
 
     @staticmethod

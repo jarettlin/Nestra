@@ -45,25 +45,29 @@ def test_each_user_gets_their_own_home(tmp_path):
         me = client.get("/api/me", headers=_auth("alice")).json()
         assert me["uid"] == "uid-alice" and me["email"] == "alice@example.com"
 
-        # New users start with empty starter rooms.
+        # New users start with the usual rooms and devices, all off.
         home = client.get("/api/home", headers=_auth("alice")).json()
-        assert [r["name"] for r in home["rooms"]] == ["Living Room", "Bedroom", "Kitchen"]
-        assert all(not r["devices"] for r in home["rooms"])
+        rooms = {r["name"]: sorted(d["type"] for d in r["devices"]) for r in home["rooms"]}
+        assert rooms == {
+            "Living Room": ["ac", "fan", "light"],
+            "Bedroom": ["ac", "fan", "light"],
+            "Kitchen": ["fan", "light"],
+        }
+        assert not any(d["on"] for r in home["rooms"] for d in r["devices"])
 
         client.post("/api/devices", headers=_auth("alice"),
-                    json={"type": "fan", "name": "Ceiling Fan", "room_id": "bedroom"})
+                    json={"type": "appliance", "name": "Bedside Speaker", "room_id": "bedroom", "kind": "speaker"})
         r = client.post("/api/command", headers=_auth("alice"), json={"text": "turn on the bedroom fan"})
         assert r.json()["ok"]
 
         bob = client.get("/api/home", headers=_auth("bob")).json()
-        assert all(not r["devices"] for r in bob["rooms"]), "Bob must not see Alice's fan"
-        r = client.post("/api/command", headers=_auth("bob"), json={"text": "turn on the bedroom fan"})
-        assert not r.json()["ok"]
+        bob_bedroom = next(r for r in bob["rooms"] if r["id"] == "bedroom")
+        assert all(d["name"] != "Bedside Speaker" for d in bob_bedroom["devices"]), "Bob must not see Alice's speaker"
+        assert not any(d["on"] for d in bob_bedroom["devices"]), "Alice's command must not touch Bob's fan"
 
     # Saved per user.
-    assert (tmp_path / "homes" / "uid-alice.json").exists()
-    assert "Ceiling Fan" in (tmp_path / "homes" / "uid-alice.json").read_text()
-    assert "Ceiling Fan" not in (tmp_path / "homes" / "uid-bob.json").read_text()
+    assert "Bedside Speaker" in (tmp_path / "homes" / "uid-alice.json").read_text()
+    assert "Bedside Speaker" not in (tmp_path / "homes" / "uid-bob.json").read_text()
 
 
 def test_websocket_requires_auth_message(tmp_path):

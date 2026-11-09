@@ -52,9 +52,17 @@ class DeviceBase(BaseModel):
         return f"{text}{self.UNIT}"
 
 
-class Light(DeviceBase):
-    type: Literal["light"] = "light"
+class PoweredDevice(DeviceBase):
+    """Something with a power switch, which can also switch itself on/off on a timer."""
+
     on: bool = False
+    # Simulated-clock times (ISO 8601) when the device switches itself on/off. None = no timer.
+    timer_on_at: str | None = None
+    timer_off_at: str | None = None
+
+
+class Light(PoweredDevice):
+    type: Literal["light"] = "light"
     brightness: float = Field(80, ge=0, le=100)
     color_temp: int = Field(3000, ge=2200, le=6500, description="Kelvin")
 
@@ -62,20 +70,26 @@ class Light(DeviceBase):
     MIN_ON: ClassVar[float] = 5.0
 
 
-class Fan(DeviceBase):
+class Fan(PoweredDevice):
     type: Literal["fan"] = "fan"
-    on: bool = False
     speed: float = Field(40, ge=0, le=100)
 
     ADJUSTABLE: ClassVar[str] = "speed"
     MIN_ON: ClassVar[float] = 10.0
 
 
-class AirConditioner(DeviceBase):
+AC_MODES = ("cool", "dry", "fan", "heat", "auto")
+AC_FAN_SPEEDS = ("auto", "low", "medium", "high")
+
+
+class AirConditioner(PoweredDevice):
     type: Literal["ac"] = "ac"
-    on: bool = False
     setpoint: float = Field(24, ge=16, le=30)
-    mode: Literal["cool", "heat", "auto"] = "cool"
+    # cool/heat: reach the setpoint. dry: dehumidify with gentle cooling.
+    # fan: circulate air only. auto: cool or heat as needed.
+    mode: Literal["cool", "dry", "fan", "heat", "auto"] = "cool"
+    # How hard the indoor unit blows; auto runs high far from the setpoint, low near it.
+    fan_speed: Literal["auto", "low", "medium", "high"] = "auto"
 
     ADJUSTABLE: ClassVar[str] = "setpoint"
     RANGE: ClassVar[tuple[float, float]] = (16.0, 30.0)
@@ -128,11 +142,10 @@ APPLIANCE_KINDS: dict[str, tuple[str, list[str]]] = {
 }
 
 
-class Appliance(DeviceBase):
+class Appliance(PoweredDevice):
     """Any other electrical appliance that is simply switched on and off."""
 
     type: Literal["appliance"] = "appliance"
-    on: bool = False
     kind: ApplianceKind = "other"
 
     def aliases(self) -> list[str]:
@@ -147,6 +160,23 @@ Device = Annotated[
 DEVICE_CLASSES: dict[str, type[DeviceBase]] = {
     cls.model_fields["type"].default: cls for cls in (Light, Fan, AirConditioner, Blinds, Lock, Appliance)
 }
+
+# Name used when the user doesn't give one (appliances use their kind's label).
+DEFAULT_DEVICE_NAMES = {
+    "light": "Light",
+    "fan": "Fan",
+    "ac": "Aircond",
+    "blinds": "Blinds",
+    "lock": "Door Lock",
+    "appliance": "Appliance",
+}
+
+
+def default_device_name(device_type: str, kind: str | None = None) -> str:
+    if device_type == "appliance" and kind and kind != "other":
+        return APPLIANCE_KINDS.get(kind, ("Appliance", []))[0]
+    return DEFAULT_DEVICE_NAMES.get(device_type, "Device")
+
 
 DEVICE_TYPE_LABELS = {
     "light": "Light",

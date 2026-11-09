@@ -24,6 +24,9 @@ ATTRIBUTE_LABELS = {
     "locked": "Lock",
     "color_temp": "Colour",
     "kind": "Appliance type",
+    "fan_speed": "Fan speed",
+    "timer_on_at": "On timer",
+    "timer_off_at": "Off timer",
     "name": "Name",
     "room_id": "Room",
 }
@@ -32,6 +35,8 @@ _LEVEL_ATTRIBUTES = {"brightness": "light", "speed": "fan"}
 
 
 def format_value(home: Home, attribute: str, value: Any) -> str:
+    if attribute.startswith("timer_"):
+        return "Not set" if not value else str(value)[11:16]
     if attribute == "on":
         return "On" if value else "Off"
     if attribute == "locked":

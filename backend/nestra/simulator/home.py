@@ -18,7 +18,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, Field, TypeAdapter
 
 from .clock import SimClock
-from .devices import AirConditioner, Blinds, Device, DeviceBase
+from .devices import AirConditioner, Blinds, Device, DeviceBase, PoweredDevice, default_device_name
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "data" / "home.json"
 
@@ -27,6 +27,10 @@ LEAK_RATE = 0.005  # share of the indoor/outdoor temperature gap closed per minu
 AC_RATE = 0.10  # °C per minute an AC can move the room toward its setpoint
 HUMIDITY_DRIFT = 0.003  # share of the indoor/outdoor humidity gap closed per minute
 AC_DRYING = 0.2  # humidity points per minute removed while an AC is cooling
+DRY_MODE_DRYING = 0.5  # humidity points per minute in dry (dehumidify) mode
+DRY_MODE_COOLING = 0.3  # dry mode cools gently, at this share of AC_RATE
+# Cooling/heating power by indoor fan speed. "auto" is decided per tick.
+FAN_SPEED_POWER = {"low": 0.6, "medium": 1.0, "high": 1.4}
 NO_BLINDS_OPENNESS = 0.6  # rooms without blinds still let some daylight in
 
 _IMMUTABLE_FIELDS = {"id", "type", "name", "room_id"}
@@ -299,11 +303,23 @@ class Home:
         self._structure_changed()
         return removed
 
+    def default_name(self, device_type: str, room_id: str, kind: str | None = None) -> str:
+        """"Aircond", or "Aircond 2" if the room already has one with that name."""
+        base = default_device_name(device_type, kind)
+        taken = {d.name.lower() for d in self.devices_in(room_id)}
+        name, n = base, 2
+        while name.lower() in taken:
+            name, n = f"{base} {n}", n + 1
+        return name
+
     def add_device(
-        self, device_type: str, name: str, room_id: str, *, source: str = "manual", **attributes: Any
+        self, device_type: str, name: str | None, room_id: str, *, source: str = "manual", **attributes: Any
     ) -> DeviceBase:
+        """Add a device. A blank name becomes a default like "Aircond" or "TV"."""
         if room_id not in self.rooms:
             raise KeyError(room_id)
+        if not (name or "").strip():
+            name = self.default_name(device_type, room_id, attributes.get("kind"))
         name = self._clean_name(name)
         self._check_device_name(name, room_id)
         forbidden = _IMMUTABLE_FIELDS & attributes.keys()
@@ -363,8 +379,43 @@ class Home:
             )
             room.environment.ambient_light = daylight * openness
 
+    def run_timers(self) -> list[str]:
+        """Switch devices whose on/off timer is due. Returns the ids that changed."""
+        now = self.clock.now().isoformat(timespec="seconds")
+        fired = []
+        for device in list(self.devices.values()):
+            if not isinstance(device, PoweredDevice):
+                continue
+            for field_name, turn_on in (("timer_off_at", False), ("timer_on_at", True)):
+                due = getattr(device, field_name)
+                if due is None or due > now:
+                    continue
+                current = self.devices[device.id]
+                changes = self.update_device(device.id, {field_name: None, "on": turn_on}, source="timer")
+                power = [c for c in changes if c.attribute == "on"]
+                fired.append(device.id)
+                if not power:  # already in that state; the timer just clears
+                    continue
+                self.log(
+                    current.name,
+                    source="timer",
+                    device_id=device.id,
+                    device_type=device.type,
+                    room_id=device.room_id,
+                    changes=[
+                        ActivityChange(
+                            attribute="on", label="Power",
+                            old=c.old, new=c.new, old_text="On" if c.old else "Off", new_text="On" if c.new else "Off",
+                        )
+                        for c in power
+                    ],
+                    detail="Timer",
+                )
+        return fired
+
     def tick(self, dt_minutes: float) -> None:
         """Advance room temperature/humidity/light by `dt_minutes` of simulated time."""
+        self.run_timers()
         t_out = self.outside_temperature()
         h_out = self.weather.humidity
         self._update_ambient_light()
@@ -377,12 +428,21 @@ class Home:
             for ac in self.devices_in(room.id):
                 if not (isinstance(ac, AirConditioner) and ac.on):
                     continue
-                if ac.mode in ("cool", "auto") and t > ac.setpoint:
-                    t -= min(t - ac.setpoint, AC_RATE * dt_minutes)
+                gap = t - ac.setpoint
+                power = FAN_SPEED_POWER.get(ac.fan_speed) or (1.4 if abs(gap) > 2 else 0.8)
+                rate = AC_RATE * power * dt_minutes
+                if ac.mode == "dry":
+                    if h > 40:
+                        h -= min(h - 40, DRY_MODE_DRYING * dt_minutes)
+                    if gap > 0:
+                        t -= min(gap, rate * DRY_MODE_COOLING)
+                elif ac.mode in ("cool", "auto") and gap > 0:
+                    t -= min(gap, rate)
                     if h > 40:
                         h -= min(h - 40, AC_DRYING * dt_minutes)
-                elif ac.mode in ("heat", "auto") and t < ac.setpoint:
-                    t += min(ac.setpoint - t, AC_RATE * dt_minutes)
+                elif ac.mode in ("heat", "auto") and gap < 0:
+                    t += min(-gap, rate)
+                # "fan" mode only moves air: no temperature change.
             h += (h_out - h) * HUMIDITY_DRIFT * dt_minutes
 
             env.temperature = t

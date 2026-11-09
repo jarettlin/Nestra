@@ -10,6 +10,7 @@ and if it is still ambiguous, the result asks the user to clarify instead of gue
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from .fuzzy.engine import InferenceResult
@@ -23,7 +24,7 @@ from .fuzzy.rules import (
 from . import activity
 from .nlu import CommandParser, DeviceRef, ParsedCommand, RoomRef
 from .simulator import Appliance, Blinds, Change, Home, Lock
-from .simulator.devices import DeviceBase
+from .simulator.devices import AirConditioner, DeviceBase, PoweredDevice
 
 COMFORT_TYPES = ("light", "fan", "ac")
 TYPE_NOUNS = {
@@ -202,6 +203,70 @@ class CommandProcessor:
 
     # --------------------------------------------------------------- planning
     def _plan(self, cmd: ParsedCommand, device: DeviceBase, confirm: bool) -> Plan | str:
+        if cmd.action == "timer":
+            return self._plan_timer(cmd, device)
+        if cmd.attribute in ("fan_speed", "mode") and cmd.action != "off":
+            result = self._plan_ac_setting(cmd, device)
+        else:
+            result = self._plan_basic(cmd, device, confirm)
+        if not isinstance(result, Plan):
+            return result
+        if cmd.timer_action in ("on", "off"):
+            # "turn on the fan for 30 minutes": do it now and schedule the opposite.
+            timer = self._plan_timer(cmd, device)
+            if isinstance(timer, Plan):
+                result.updates.update(timer.updates)
+                result.reply += f"; {timer.reply[len(device.name) + 1:]}"
+        elif cmd.timer_action == "unsupported":
+            result.reply += " now (timers can only switch devices on or off)"
+        return result
+
+    # ------------------------------------------------------------------ timers
+    def _due(self, cmd: ParsedCommand) -> tuple[str, str]:
+        """When a timer fires, as (ISO time, words like "23:30 (in 2 hours)")."""
+        now = self.home.clock.now().replace(microsecond=0)
+        if cmd.timer_minutes is not None:
+            due = now + timedelta(minutes=cmd.timer_minutes)
+            return due.isoformat(), f"{due:%H:%M} (in {_duration(cmd.timer_minutes)})"
+        hour, minute = (int(x) for x in (cmd.timer_at or "00:00").split(":"))
+        due = now.replace(hour=hour, minute=minute, second=0)
+        if due <= now:
+            due += timedelta(days=1)
+        when = f"{due:%H:%M}" + (" tomorrow" if due.date() != now.date() else "")
+        return due.isoformat(), when
+
+    def _plan_timer(self, cmd: ParsedCommand, device: DeviceBase) -> Plan | str:
+        if not isinstance(device, PoweredDevice):
+            return f"The {device.name} doesn't have a timer"
+        if cmd.timer_action == "cancel":
+            if device.timer_on_at is None and device.timer_off_at is None:
+                return f"The {device.name} has no timer set"
+            return Plan(device, {"timer_on_at": None, "timer_off_at": None}, f"{device.name} timer cancelled")
+        due, when = self._due(cmd)
+        return Plan(device, {f"timer_{cmd.timer_action}_at": due}, f"{device.name} will turn {cmd.timer_action} at {when}")
+
+    # --------------------------------------------------------- aircond settings
+    def _plan_ac_setting(self, cmd: ParsedCommand, device: DeviceBase) -> Plan | str:
+        name = device.name
+        if not isinstance(device, AirConditioner):
+            what = "fan speed setting" if cmd.attribute == "fan_speed" else "modes"
+            return f"The {name} doesn't have {what}"
+        if cmd.attribute == "mode":
+            if not cmd.setting:
+                return f"Which mode for the {name}? Cool, dry, fan, heat or auto"
+            return Plan(device, {"mode": cmd.setting, "on": True}, f"{name} set to {cmd.setting} mode")
+        levels = ["low", "medium", "high"]
+        if cmd.setting:
+            new = cmd.setting
+        elif cmd.action in ("increase", "decrease"):
+            current = device.fan_speed if device.fan_speed != "auto" else "medium"
+            step = 1 if cmd.action == "increase" else -1
+            new = levels[min(max(levels.index(current) + step, 0), len(levels) - 1)]
+        else:
+            return f"What fan speed for the {name}? Auto, low, medium or high"
+        return Plan(device, {"fan_speed": new, "on": True}, f"{name} fan set to {new}")
+
+    def _plan_basic(self, cmd: ParsedCommand, device: DeviceBase, confirm: bool) -> Plan | str:
         action = cmd.action
         name = device.name
 
@@ -344,3 +409,14 @@ def _join(items: list[str]) -> str:
 def _sentence(text: str) -> str:
     text = text.strip()
     return text if text.endswith((".", "?", "!")) else text + "."
+
+
+def _duration(minutes: float) -> str:
+    total = round(minutes)
+    hours, mins = divmod(total, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if mins or not hours:
+        parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+    return " ".join(parts)
