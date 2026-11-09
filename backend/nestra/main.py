@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
@@ -43,6 +43,9 @@ from .simulator import Home, SimClock
 from .simulator.devices import APPLIANCE_KINDS, DEVICE_CLASSES, DEVICE_TYPE_LABELS
 from .simulator.home import DEFAULT_CONFIG, Environment, HomeConfig, Room
 from .store import FirestoreStore, HomeStore, JsonFileStore
+from .voice import SpeechToText, vocabulary_hint
+
+MAX_AUDIO_BYTES = 10 * 1024 * 1024  # ~10 minutes of compressed speech; commands are a few seconds
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_WEB_DIR = BACKEND_DIR.parent / "app" / "build" / "web"
@@ -195,6 +198,7 @@ def create_app(
     simulate: bool = True,
     store: HomeStore | None = None,
     authenticator: Authenticator | None = None,
+    speech: SpeechToText | None = None,
 ) -> FastAPI:
     """Build the app.
 
@@ -208,6 +212,7 @@ def create_app(
         else SimClock(scale=settings.time_scale)
     )
     authenticator = authenticator or _build_auth(settings)
+    speech = speech or SpeechToText()
 
     def new_home(uid: str) -> HomeConfig:
         # The shared local home starts as the demo so there's something to play with.
@@ -231,6 +236,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(simulation_loop()) if simulate else None
+        if simulate and not speech.loaded:
+            speech.preload_in_background()  # so the first voice command isn't slow
         yield
         if task:
             task.cancel()
@@ -365,6 +372,29 @@ def create_app(
     def post_command(req: CommandRequest, s: HomeSession = Depends(current_session)) -> dict[str, Any]:
         """Natural-language command (typed, or the transcript from speech-to-text)."""
         return run_command(s, req, source="voice")
+
+    @app.post("/api/voice")
+    def post_voice(
+        audio: UploadFile = File(..., description="Recorded speech (webm, ogg, mp4/m4a, wav...)"),
+        room_context: str | None = Form(None),
+        confirm: bool = Form(False),
+        s: HomeSession = Depends(current_session),
+    ) -> dict[str, Any]:
+        """Spoken command: transcribe with Whisper, then run it like /api/command."""
+        data = audio.file.read(MAX_AUDIO_BYTES + 1)
+        if not data:
+            raise HTTPException(422, "No audio received")
+        if len(data) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "Recording is too long")
+        try:
+            heard = speech.transcribe(data, hint=vocabulary_hint(s.home))
+        except Exception as e:
+            raise HTTPException(422, "Couldn't read that recording. Please try again.") from e
+        extra = {"transcript": heard.text, "transcribe_seconds": round(heard.seconds, 2)}
+        if not heard.text.strip(" .,!?"):
+            return {"ok": False, "reply": "I didn't catch that. Please try again.", **extra}
+        req = CommandRequest(text=heard.text, room_context=room_context, confirm=confirm)
+        return {**run_command(s, req, source="voice"), **extra}
 
     @app.get("/api/activity")
     def get_activity(limit: int = 20, s: HomeSession = Depends(current_session)) -> list[dict[str, Any]]:

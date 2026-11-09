@@ -146,3 +146,12 @@ def test_api_timer_by_minutes_and_clock_time(tmp_path):
         assert client.patch("/api/devices/bedroom_ac", json={"timer_off_in": "soon"}).status_code == 422
         d = client.patch("/api/devices/bedroom_ac", json={"fan_speed": "high", "mode": "dry"}).json()["device"]
         assert (d["fan_speed"], d["mode"]) == ("high", "dry")
+
+
+def test_reply_names_the_room_when_device_names_repeat(tmp_path):
+    from nestra.commands import CommandProcessor
+    from nestra.main import Settings, _starter_config
+
+    home = Home(_starter_config(Settings()), clock=SimClock.at_hour(14))
+    reply = CommandProcessor(home).execute("turn on the bedroom aircond").reply
+    assert reply == "Bedroom Aircond turned on."

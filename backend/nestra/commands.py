@@ -121,9 +121,10 @@ class CommandProcessor:
                 for device in self._resolve(cmd, room_context):
                     plan_or_note = self._plan(cmd, device, confirm)
                     if isinstance(plan_or_note, Plan):
+                        plan_or_note.reply = self._with_room(device, plan_or_note.reply)
                         plans.append(plan_or_note)
                     else:
-                        notes.append(plan_or_note)
+                        notes.append(self._with_room(device, plan_or_note))
         except Clarify as q:
             return CommandResult(
                 False, q.question, parsed=parsed, needs_clarification=True, options=q.options
@@ -144,6 +145,16 @@ class CommandProcessor:
         replies += notes
         reply = " ".join(_sentence(r) for r in replies) or "Nothing to change."
         return CommandResult(True, reply, changes, explanations, parsed)
+
+    def _with_room(self, device: DeviceBase, text: str) -> str:
+        """'Aircond turned on' -> 'Bedroom Aircond turned on' when another room has an 'Aircond' too."""
+        room = self.home.rooms.get(device.room_id)
+        same_name = any(
+            d.id != device.id and d.name.lower() == device.name.lower() for d in self.home.devices.values()
+        )
+        if not room or not same_name or room.name.lower() in text.lower():
+            return text
+        return text.replace(device.name, f"{room.name} {device.name}", 1)
 
     # ------------------------------------------------------------- resolution
     @staticmethod
