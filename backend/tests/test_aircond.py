@@ -128,3 +128,21 @@ def test_default_names(home):
     b = home.add_device("ac", None, "kitchen")
     tv = home.add_device("appliance", " ", "kitchen", kind="tv")
     assert (a.name, b.name, tv.name) == ("Aircond", "Aircond 2", "TV")
+
+
+def test_api_timer_by_minutes_and_clock_time(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from nestra.main import Settings, create_app
+
+    s = Settings(start_hour=21.5, time_scale=0, state_file=tmp_path / "home.json")
+    with TestClient(create_app(settings=s, simulate=False)) as client:
+        d = client.patch("/api/devices/bedroom_ac", json={"timer_off_in": 90}).json()["device"]
+        assert d["timer_off_at"].endswith("T23:00:00")
+        d = client.patch("/api/devices/bedroom_ac", json={"timer_on_at_time": "07:30"}).json()["device"]
+        assert d["timer_on_at"].endswith("T07:30:00")
+        d = client.patch("/api/devices/bedroom_ac", json={"timer_off_at": None, "timer_on_at": None}).json()["device"]
+        assert d["timer_off_at"] is None and d["timer_on_at"] is None
+        assert client.patch("/api/devices/bedroom_ac", json={"timer_off_in": "soon"}).status_code == 422
+        d = client.patch("/api/devices/bedroom_ac", json={"fan_speed": "high", "mode": "dry"}).json()["device"]
+        assert (d["fan_speed"], d["mode"]) == ("high", "dry")

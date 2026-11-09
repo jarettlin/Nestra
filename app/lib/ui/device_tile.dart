@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../state/home_controller.dart';
 import '../theme.dart';
+import 'device_panel.dart';
 import 'manage_dialogs.dart';
 
 /// One device card in the selected room's grid. The control at the bottom
@@ -38,16 +39,24 @@ class DeviceTile extends StatelessWidget {
                     : null,
               ),
               const Spacer(),
+              if (device.hasTimer)
+                const Padding(
+                  padding: EdgeInsets.only(right: 4),
+                  child: Tooltip(
+                    message: 'Timer set',
+                    child: Icon(Icons.timer_outlined, size: 14, color: NestraColors.purple),
+                  ),
+                ),
               _statusLabel(),
               const SizedBox(width: 2),
               SizedBox.square(
                 dimension: 28,
                 child: IconButton(
-                  tooltip: 'Edit device',
+                  tooltip: device.isPowered ? 'Details and timers' : 'Edit device',
                   padding: EdgeInsets.zero,
                   iconSize: 16,
                   color: NestraColors.textMuted,
-                  onPressed: () => showDeviceForm(context, controller, device: device),
+                  onPressed: () => _openDetails(context),
                   icon: const Icon(Icons.more_horiz_rounded),
                 ),
               ),
@@ -66,10 +75,15 @@ class DeviceTile extends StatelessWidget {
       ),
     );
     return GestureDetector(
+      onTap: device.isPowered ? () => _openDetails(context) : null,
       onLongPress: () => showDeviceForm(context, controller, device: device),
       child: tile,
     );
   }
+
+  void _openDetails(BuildContext context) => device.isPowered
+      ? showDevicePanel(context, controller, device.id)
+      : showDeviceForm(context, controller, device: device);
 
   Widget _statusLabel() {
     final text = switch (device.type) {
@@ -279,6 +293,7 @@ class _LevelBarState extends State<_LevelBar> {
           },
           child: Container(
             height: 32,
+            width: width, // full-width track, even at 0%
             decoration: BoxDecoration(
               color: NestraColors.track,
               borderRadius: BorderRadius.circular(10),
@@ -390,7 +405,7 @@ class _Setpoint extends StatelessWidget {
         _RoundButton(icon: Icons.remove_rounded, onTap: () => _nudge(-0.5)),
         Expanded(
           child: Text(
-            device.on ? '${device.mode[0].toUpperCase()}${device.mode.substring(1)}' : 'Off',
+            device.on ? '${_cap(device.mode)} · ${_cap(device.fanSpeed)}' : 'Off',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 12, color: NestraColors.textSecondary),
           ),
@@ -445,3 +460,5 @@ class _PillButton extends StatelessWidget {
         ),
       );
 }
+
+String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';

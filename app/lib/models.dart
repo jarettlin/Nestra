@@ -21,6 +21,10 @@ class Device {
   bool get locked => json['locked'] != false;
   String get mode => (json['mode'] as String?) ?? 'cool';
   String get kind => (json['kind'] as String?) ?? 'other';
+  String get fanSpeed => (json['fan_speed'] as String?) ?? 'auto';
+  DateTime? get timerOnAt => DateTime.tryParse(json['timer_on_at'] as String? ?? '');
+  DateTime? get timerOffAt => DateTime.tryParse(json['timer_off_at'] as String? ?? '');
+  bool get hasTimer => timerOnAt != null || timerOffAt != null;
 
   bool get isPowered => type == 'light' || type == 'fan' || type == 'ac' || type == 'appliance';
 

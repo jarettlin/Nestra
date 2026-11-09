@@ -124,9 +124,15 @@ class RoomCard extends StatelessWidget {
     final env = room.environment;
     final parts = <String>[];
     final ac = devices.where((d) => d.type == 'ac' && d.on).firstOrNull;
-    parts.add(ac != null
-        ? '${formatTemp(env.temperature)} · Cooling to ${formatTemp(ac.setpoint)}'
-        : '${formatTemp(env.temperature)} · ${env.humidity.round()}% humidity');
+    final acText = ac == null
+        ? null
+        : switch (ac.mode) {
+            'heat' => 'Heating to ${formatTemp(ac.setpoint)}',
+            'dry' => 'Drying the air',
+            'fan' => 'Aircond fan only',
+            _ => 'Cooling to ${formatTemp(ac.setpoint)}',
+          };
+    parts.add('${formatTemp(env.temperature)} · ${acText ?? '${env.humidity.round()}% humidity'}');
 
     final lights = devices.where((d) => d.type == 'light').toList();
     final lit = lights.where((d) => d.on).toList();

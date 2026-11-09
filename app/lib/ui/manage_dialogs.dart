@@ -62,8 +62,8 @@ class _DeviceFormState extends State<_DeviceForm> {
 
   Future<void> _save() async {
     final name = _name.text.trim();
-    if (name.isEmpty) {
-      setState(() => _error = 'Give the device a name, e.g. "Kitchen Kettle".');
+    if (name.isEmpty && _editing) {
+      setState(() => _error = 'The device needs a name.');
       return;
     }
     setState(() {
@@ -114,6 +114,22 @@ class _DeviceFormState extends State<_DeviceForm> {
     } else {
       setState(() => _error = error);
     }
+  }
+
+  /// Same defaults the backend uses when the name is left blank.
+  String _defaultName(String type) {
+    if (type == 'appliance' && _kind != 'other') {
+      return _catalog.applianceKinds.where((k) => k.value == _kind).firstOrNull?.label ?? 'Appliance';
+    }
+    return const {
+          'light': 'Light',
+          'fan': 'Fan',
+          'ac': 'Aircond',
+          'blinds': 'Blinds',
+          'lock': 'Door Lock',
+          'appliance': 'Appliance',
+        }[type] ??
+        'Device';
   }
 
   @override
@@ -177,7 +193,7 @@ class _DeviceFormState extends State<_DeviceForm> {
         const _Label('Name'),
         _TextInput(
           controller: _name,
-          hint: type == 'appliance' ? 'e.g. Living Room TV' : 'e.g. Bedside Lamp',
+          hint: _editing ? '' : 'Optional, defaults to "${_defaultName(type)}"',
           onSubmitted: _save,
         ),
         const SizedBox(height: 6),

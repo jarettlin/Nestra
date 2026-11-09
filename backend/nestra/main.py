@@ -35,6 +35,7 @@ from .auth import (
     firebase_app,
     require_credentials,
 )
+from .commands import timer_due
 from .fuzzy.engine import NoRuleFired
 from .fuzzy.rules import SYSTEMS
 from .sessions import HomeSession, SessionManager
@@ -336,6 +337,17 @@ def create_app(
         if device_id not in home.devices:
             raise HTTPException(404, f"Unknown device {device_id!r}")
         structural = {k: updates.pop(k) for k in ("name", "room_id") if k in updates}
+        # Timers by the simulated clock: {"timer_off_in": 30} (minutes) or {"timer_on_at_time": "07:00"}.
+        for which in ("on", "off"):
+            minutes = updates.pop(f"timer_{which}_in", None)
+            at = updates.pop(f"timer_{which}_at_time", None)
+            if minutes is not None or at is not None:
+                try:
+                    updates[f"timer_{which}_at"], _ = timer_due(
+                        home.clock.now(), minutes=float(minutes) if minutes is not None else None, at=at
+                    )
+                except (TypeError, ValueError) as e:
+                    raise HTTPException(422, f"Invalid timer: {e}") from e
         kind_changed = "kind" in updates and updates["kind"] != getattr(home.devices[device_id], "kind", None)
 
         def apply() -> list:

@@ -223,17 +223,7 @@ class CommandProcessor:
 
     # ------------------------------------------------------------------ timers
     def _due(self, cmd: ParsedCommand) -> tuple[str, str]:
-        """When a timer fires, as (ISO time, words like "23:30 (in 2 hours)")."""
-        now = self.home.clock.now().replace(microsecond=0)
-        if cmd.timer_minutes is not None:
-            due = now + timedelta(minutes=cmd.timer_minutes)
-            return due.isoformat(), f"{due:%H:%M} (in {_duration(cmd.timer_minutes)})"
-        hour, minute = (int(x) for x in (cmd.timer_at or "00:00").split(":"))
-        due = now.replace(hour=hour, minute=minute, second=0)
-        if due <= now:
-            due += timedelta(days=1)
-        when = f"{due:%H:%M}" + (" tomorrow" if due.date() != now.date() else "")
-        return due.isoformat(), when
+        return timer_due(self.home.clock.now(), minutes=cmd.timer_minutes, at=cmd.timer_at)
 
     def _plan_timer(self, cmd: ParsedCommand, device: DeviceBase) -> Plan | str:
         if not isinstance(device, PoweredDevice):
@@ -420,3 +410,19 @@ def _duration(minutes: float) -> str:
     if mins or not hours:
         parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
     return " ".join(parts)
+
+
+def timer_due(now: datetime, *, minutes: float | None = None, at: str | None = None) -> tuple[str, str]:
+    """When a timer fires, as (ISO time, words like "23:30 (in 2 hours)").
+
+    `minutes` counts from now; `at` is a clock time "HH:MM" (tomorrow if already past).
+    """
+    now = now.replace(microsecond=0)
+    if minutes is not None:
+        due = now + timedelta(minutes=minutes)
+        return due.isoformat(), f"{due:%H:%M} (in {_duration(minutes)})"
+    hour, minute = (int(x) for x in (at or "00:00").split(":"))
+    due = now.replace(hour=hour, minute=minute, second=0)
+    if due <= now:
+        due += timedelta(days=1)
+    return due.isoformat(), f"{due:%H:%M}" + (" tomorrow" if due.date() != now.date() else "")
