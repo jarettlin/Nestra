@@ -119,7 +119,11 @@ class _Collection:
         return self.docs.setdefault(doc_id, _Doc())
 
     def order_by(self, field, direction=None):
-        self._desc = "DESC" in str(direction).upper()
+        # Like real Firestore: sorting on the document id descending needs a custom index.
+        self._desc = direction is not None and "DESC" in str(direction).upper()
+        if field == "__name__" and self._desc:
+            raise RuntimeError("400 The query requires an index")
+        self._field = field
         return self
 
     def limit(self, n):
@@ -127,8 +131,9 @@ class _Collection:
         return self
 
     def stream(self):
-        ids = sorted((k for k, d in self.docs.items() if d.data is not None), reverse=self._desc)
-        return [_Snap(self.docs[k].data) for k in ids[: self._limit]]
+        docs = [d.data for d in self.docs.values() if d.data is not None]
+        docs.sort(key=lambda d: d[self._field], reverse=self._desc)
+        return [_Snap(d) for d in docs[: self._limit]]
 
 
 class FakeFirestore:
@@ -177,7 +182,7 @@ def test_activity_entry_ids_sort_in_firestore():
     db = FakeFirestore()
     store = FirestoreStore(db, "u")
     for i in (9, 10, 11):
-        store.append_activity(ActivityEntry(id=i, time="2026-11-09T10:00:00", title=f"e{i}"))
+        store.append_activity(ActivityEntry(id=i, time=f"2026-11-09T10:00:{i:02d}", title=f"e{i}"))
     assert [e.id for e in store.recent_activity(3)] == [11, 10, 9]
 
 
@@ -187,3 +192,18 @@ def test_health_reports_auth_mode(tmp_path, value):
     auth = FakeAuth() if value == "firebase" else None
     with TestClient(create_app(settings=s, simulate=False, authenticator=auth)) as client:
         assert client.get("/api/health").json()["auth"] == value
+
+
+def test_home_opens_even_if_history_fails(tmp_path):
+    from nestra.sessions import SessionManager
+
+    class BrokenHistory(FirestoreStore):
+        def recent_activity(self, limit):
+            raise RuntimeError("400 The query requires an index")
+
+    db = FakeFirestore()
+    FirestoreStore(db, "u").save(Home.from_file(DEFAULT_CONFIG).to_config())
+    manager = SessionManager(clock=SimClock.at_hour(14), store_for=lambda uid: BrokenHistory(db, uid),
+                             new_home=lambda uid: None)
+    session = manager.get("u")
+    assert session.home.devices  # loaded despite the history error

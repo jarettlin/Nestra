@@ -97,8 +97,12 @@ class FirestoreStore:
     def recent_activity(self, limit: int) -> list[ActivityEntry]:
         from google.cloud.firestore import Query
 
-        query = self.doc.collection("activity").order_by("__name__", direction=Query.DESCENDING).limit(limit)
-        return [ActivityEntry.model_validate(s.to_dict()) for s in query.stream()]
+        # Sort on the entry's own "time" field: Firestore indexes ordinary fields
+        # automatically in both directions, so newest-first needs no custom index
+        # (sorting on the document id descending would).
+        query = self.doc.collection("activity").order_by("time", direction=Query.DESCENDING).limit(limit)
+        entries = [ActivityEntry.model_validate(s.to_dict()) for s in query.stream()]
+        return sorted(entries, key=lambda e: (e.time, e.id), reverse=True)
 
 
 class StoreWriter:

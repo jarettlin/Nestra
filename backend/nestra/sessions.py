@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -19,6 +20,7 @@ from .simulator.home import HomeConfig
 from .store import HomeStore, StoreWriter
 
 ACTIVITY_TO_LOAD = 50
+log = logging.getLogger("nestra.sessions")
 
 
 class Hub:
@@ -79,7 +81,11 @@ class SessionManager:
         is_new = config is None
         home = Home(config or self.new_home(uid), clock=self.clock)
         if store and not is_new:
-            home.restore_activity(store.recent_activity(ACTIVITY_TO_LOAD))
+            try:
+                home.restore_activity(store.recent_activity(ACTIVITY_TO_LOAD))
+            except Exception:
+                # History is nice to have; never let it stop the home from opening.
+                log.exception("Could not load activity history for %s", uid)
         return self._wrap(uid, home, store, is_new=is_new)
 
     def _wrap(self, uid: str, home: Home, store: HomeStore | None, *, is_new: bool) -> HomeSession:
