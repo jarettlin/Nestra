@@ -44,7 +44,7 @@ _MANY = re.compile(r"^Turned (?P<state>on|off) (?P<n>\d+) devices (?P<where>.+)$
 # Ways of ending the conversation: "thanks", "that's all", "no that's it", "goodbye", "nothing".
 _DONE = re.compile(
     r"^\W*(?:(?:no|nope|nah|okay|ok|alright|great|cool|perfect|good)\W+)*"
-    r"(?:thanks?(?: you)?(?: so much| very much)?|thank you(?: nestra)?|cheers|that'?s (?:all|it|everything|good|fine|enough)"
+    r"(?:thanks?(?: you)?(?: so much| very much)?|thank you(?: nestra)?|cheers|that(?:'?s| is) (?:all|it|everything|good|fine|enough)"
     r"|that will be all|nothing(?: else)?(?: thanks?)?|no(?:thing)? more|i'?m (?:good|done|fine|okay|all set)"
     r"|all good|good ?bye|bye|see you|never ?mind|stop|cancel|that'?s all for now|no thanks?)"
     r"(?:\W+(?:nestra|thanks?|thank you|bye|for now|that'?s all|that'?s it))*\W*$",

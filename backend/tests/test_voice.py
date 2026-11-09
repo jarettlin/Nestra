@@ -132,7 +132,7 @@ def test_conversation_needs_no_wake_phrase_and_ends_on_thanks(tmp_path):
 def test_goodbye_detection():
     from nestra.replies import is_goodbye
 
-    for text in ["thanks", "Thank you so much", "that's all", "No thanks", "Nope, that's it.", "goodbye", "never mind"]:
+    for text in ["thanks", "Thank you so much", "that's all", "No thanks", "Nope, that's it.", "goodbye", "never mind", "ok thanks", "alright that is all"]:
         assert is_goodbye(text), text
     for text in ["turn off the lights", "thanks, now turn off the fan", "all lights off", "stop the fan"]:
         assert not is_goodbye(text), text
