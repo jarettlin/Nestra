@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../services/voice.dart';
 import '../state/home_controller.dart';
 import '../theme.dart';
 
@@ -13,17 +15,20 @@ const _examples = [
   'Unlock the front door',
 ];
 
-Future<void> showCommandDialog(BuildContext context, HomeController controller) => showDialog(
+/// Opens the command box. With [listen], it starts recording straight away (the mic button).
+Future<void> showCommandDialog(BuildContext context, HomeController controller, {bool listen = true}) => showDialog(
       context: context,
-      builder: (_) => CommandDialog(controller: controller),
+      builder: (_) => CommandDialog(controller: controller, listenOnOpen: listen),
     );
 
-/// Type a command (voice input comes later and will feed the same box).
-/// Handles the backend's follow-ups: "which room?" and "are you sure?".
+/// Speak or type a command. Voice is recorded here, transcribed by the backend
+/// (Whisper), and the reply is spoken back. Handles the backend's follow-ups:
+/// "which room?" and "are you sure?".
 class CommandDialog extends StatefulWidget {
-  const CommandDialog({super.key, required this.controller});
+  const CommandDialog({super.key, required this.controller, this.listenOnOpen = false});
 
   final HomeController controller;
+  final bool listenOnOpen;
 
   @override
   State<CommandDialog> createState() => _CommandDialogState();
@@ -31,13 +36,24 @@ class CommandDialog extends StatefulWidget {
 
 class _CommandDialogState extends State<CommandDialog> {
   final _text = TextEditingController();
+  final _recorder = VoiceRecorder();
   String _lastCommand = '';
   CommandResult? _result;
   bool _busy = false;
+  bool _listening = false;
+  bool _spoken = false; // this conversation started by voice, so answer out loud
+  String? _voiceError;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.listenOnOpen) WidgetsBinding.instance.addPostFrameCallback((_) => _listen());
+  }
 
   @override
   void dispose() {
     _text.dispose();
+    _recorder.dispose();
     super.dispose();
   }
 
@@ -54,6 +70,75 @@ class _CommandDialogState extends State<CommandDialog> {
       _busy = false;
       _result = result;
     });
+    if (_spoken) Speaker.instance.say(result.reply);
+  }
+
+  Future<void> _listen() async {
+    if (_listening || _busy) return;
+    await Speaker.instance.stop();
+    setState(() {
+      _voiceError = null;
+      _result = null;
+    });
+    final allowed = await _recorder.hasPermission().timeout(const Duration(seconds: 8), onTimeout: () => false);
+    if (!mounted) return;
+    if (!allowed) {
+      setState(() => _voiceError =
+          'Nestra needs microphone access. Allow it in your browser (Safari, Chrome...), then tap the mic again.');
+      return;
+    }
+    try {
+      setState(() => _listening = true);
+      final stoppedByItself = _recorder.start();
+      await stoppedByItself; // returns when you stop talking, or after 10 s
+      if (_listening) await _finishListening();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _listening = false;
+          _voiceError = 'Couldn\'t use the microphone: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _finishListening() async {
+    if (!_listening) return;
+    setState(() {
+      _listening = false;
+      _busy = true;
+    });
+    final recording = await _recorder.stop();
+    if (!mounted) return;
+    if (recording == null) {
+      setState(() {
+        _busy = false;
+        _voiceError = 'Nothing was recorded. Please try again.';
+      });
+      return;
+    }
+    final result = await widget.controller.runVoice(
+      recording.bytes,
+      filename: recording.filename,
+      mimeType: recording.mimeType,
+    );
+    if (!mounted) return;
+    final heard = result.transcript?.trim() ?? '';
+    setState(() {
+      _busy = false;
+      _spoken = true;
+      _result = result;
+      if (heard.isNotEmpty) {
+        _text.text = heard;
+        _lastCommand = heard;
+      }
+    });
+    Speaker.instance.say(result.reply);
+  }
+
+  Future<void> _cancelListening() async {
+    await _recorder.cancel();
+    if (mounted) setState(() => _listening = false);
   }
 
   @override
@@ -79,6 +164,20 @@ class _CommandDialogState extends State<CommandDialog> {
                   const Expanded(
                     child: Text('What would you like to do?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                   ),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: Speaker.instance.muted,
+                    builder: (context, muted, _) => IconButton(
+                      tooltip: muted ? 'Speak replies' : 'Mute spoken replies',
+                      onPressed: () {
+                        Speaker.instance.muted.value = !muted;
+                        if (!muted) Speaker.instance.stop();
+                      },
+                      icon: Icon(
+                        muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                        color: NestraColors.textSecondary,
+                      ),
+                    ),
+                  ),
                   IconButton(
                     tooltip: 'Close',
                     onPressed: () => Navigator.pop(context),
@@ -92,13 +191,29 @@ class _CommandDialogState extends State<CommandDialog> {
                 style: const TextStyle(fontSize: 12, color: NestraColors.textSecondary),
               ),
               const SizedBox(height: 16),
+              _VoiceButton(
+                listening: _listening,
+                busy: _busy,
+                level: _recorder.level,
+                onStart: _listen,
+                onStop: _finishListening,
+                onCancel: _cancelListening,
+              ),
+              if (_voiceError != null) ...[
+                const SizedBox(height: 10),
+                Text(_voiceError!, style: const TextStyle(color: NestraColors.red, fontSize: 12.5)),
+              ],
+              const SizedBox(height: 16),
               TextField(
                 controller: _text,
-                autofocus: true,
+                autofocus: !widget.listenOnOpen,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (t) => _run(t),
+                          onSubmitted: (t) {
+                  _spoken = false;
+                  _run(t);
+                },
                 decoration: InputDecoration(
-                  hintText: 'e.g. lower the fan to a comfortable speed',
+                  hintText: 'Or type, e.g. lower the fan to a comfortable speed',
                   hintStyle: const TextStyle(color: NestraColors.textMuted),
                   filled: true,
                   fillColor: NestraColors.card,
@@ -144,6 +259,7 @@ class _CommandDialogState extends State<CommandDialog> {
                         side: const BorderSide(color: NestraColors.border),
                         onPressed: () {
                           _text.text = e;
+                          _spoken = false;
                           _run(e);
                         },
                       ),
@@ -291,6 +407,81 @@ class _Why extends StatelessWidget {
                 ],
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Big round mic: tap to talk, pulses with your voice while listening.
+class _VoiceButton extends StatelessWidget {
+  const _VoiceButton({
+    required this.listening,
+    required this.busy,
+    required this.level,
+    required this.onStart,
+    required this.onStop,
+    required this.onCancel,
+  });
+
+  final bool listening;
+  final bool busy;
+  final ValueListenable<double> level;
+  final VoidCallback onStart;
+  final VoidCallback onStop;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = listening
+        ? 'Listening… stop talking to send'
+        : busy
+            ? 'Thinking…'
+            : 'Tap to speak';
+    return Center(
+      child: Column(
+        children: [
+          ValueListenableBuilder<double>(
+            valueListenable: level,
+            builder: (context, v, _) {
+              final glow = listening ? 10 + 30 * v : 0.0;
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: 84,
+                height: 84,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: listening ? NestraColors.red : NestraColors.purple,
+                  boxShadow: [
+                    BoxShadow(
+                      color: (listening ? NestraColors.red : NestraColors.purple).withValues(alpha: 0.35),
+                      blurRadius: glow,
+                      spreadRadius: glow / 3,
+                    ),
+                  ],
+                ),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: busy ? null : (listening ? onStop : onStart),
+                    child: Center(
+                      child: busy
+                          ? const SizedBox.square(
+                              dimension: 28,
+                              child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                            )
+                          : Icon(listening ? Icons.stop_rounded : Icons.mic_rounded, color: Colors.white, size: 36),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          Text(label, style: const TextStyle(fontSize: 13, color: NestraColors.textSecondary)),
+          if (listening)
+            TextButton(onPressed: onCancel, child: const Text('Cancel')),
         ],
       ),
     );

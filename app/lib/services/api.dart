@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../config.dart';
 import '../models.dart';
@@ -57,6 +58,32 @@ class NestraApi {
           )));
 
   Future<void> deleteDevice(String id) async => _check(await _send(() => _client.delete(apiUri('/api/devices/$id'))));
+
+  /// Upload a recording; the backend transcribes it and runs the command.
+  Future<CommandResult> voice(
+    List<int> audio, {
+    required String filename,
+    required String mimeType,
+    String? roomContext,
+  }) async {
+    final request = http.MultipartRequest('POST', apiUri('/api/voice'))
+      ..files.add(http.MultipartFile.fromBytes('audio', audio, filename: filename, contentType: _mediaType(mimeType)));
+    if (roomContext != null) request.fields['room_context'] = roomContext;
+    final http.Response res;
+    try {
+      // Generous timeout: the first request may wait for the speech model to load.
+      res = await http.Response.fromStream(await _client.send(request).timeout(const Duration(seconds: 60)));
+    } catch (_) {
+      throw ApiException("Can't reach the Nestra backend at $apiBase. Is it running?");
+    }
+    _check(res);
+    return CommandResult.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  static MediaType _mediaType(String mime) {
+    final [type, sub] = mime.split('/');
+    return MediaType(type, sub);
+  }
 
   Future<CommandResult> command(String text, {String? roomContext, bool confirm = false}) async {
     final res = await _send(

@@ -25,6 +25,13 @@ flutter run -d web-server --web-port 8080
 Point the app at another backend with `--dart-define=NESTRA_API=http://192.168.1.20:8000`,
 and show a name in the greeting with `--dart-define=NESTRA_USER=Alex`.
 
+## Voice
+
+Tap the mic: Nestra records until you stop talking, the backend transcribes it
+locally with Whisper, runs the command and the reply is spoken back (mute with
+the speaker icon). Use a real browser such as Safari or Chrome and allow
+microphone access; the Claude app's built-in browser pane blocks the microphone.
+
 ## Sign-in (Firebase Auth)
 
 The app opens on a login screen (email/password or Google) and sends the user's

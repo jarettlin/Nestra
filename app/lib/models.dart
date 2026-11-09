@@ -214,6 +214,7 @@ class CommandResult {
     this.needsConfirmation = false,
     this.options = const [],
     this.explanations = const [],
+    this.transcript,
   });
 
   factory CommandResult.fromJson(Map<String, dynamic> j) => CommandResult(
@@ -229,6 +230,7 @@ class CommandResult {
           for (final e in (j['explanations'] as List? ?? []))
             Explanation.fromJson(e as Map<String, dynamic>),
         ],
+        transcript: j['transcript'] as String?,
       );
 
   final bool ok;
@@ -237,4 +239,7 @@ class CommandResult {
   final bool needsConfirmation;
   final List<RoomOption> options;
   final List<Explanation> explanations;
+
+  /// What Whisper heard, for voice commands.
+  final String? transcript;
 }
