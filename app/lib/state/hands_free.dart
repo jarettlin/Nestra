@@ -24,7 +24,7 @@ class Turn {
 /// without the wake phrase (a conversation) until you say "thank you" /
 /// "that's all", or stay quiet for [followUpWindow].
 class HandsFree extends ChangeNotifier {
-  HandsFree(this.controller, {this.followUpWindow = const Duration(seconds: 8)}) {
+  HandsFree(this.controller, {this.followUpWindow = const Duration(seconds: 12)}) {
     _listener = WakeListener(onSpeech: _onSpeech);
   }
 
@@ -151,6 +151,7 @@ class HandsFree extends ChangeNotifier {
     _set(HandsFreeStatus.thinking);
     await Speaker.instance.say(result.reply); // the mic ignores speech while Nestra talks
     if (!enabled) return;
+    debugPrint('Hands-free: replied "${result.reply}" (end=${result.end}, misses=$_misses)');
     if (result.end || _misses >= 2) {
       endConversation(); // "thank you", or two things in a row it didn't understand
     } else {
@@ -170,6 +171,7 @@ class HandsFree extends ChangeNotifier {
       _quiet = Timer(const Duration(seconds: 2), _quietCheck); // still talking
       return;
     }
+    debugPrint('Hands-free: no follow-up for ${followUpWindow.inSeconds}s, back to waiting for "Hi Nestra"');
     endConversation(); // nobody answered: back to waiting for "Hi Nestra"
   }
 

@@ -39,7 +39,7 @@ Say "Hi Nestra" and wait for "Yes?", or say it all at once: "Hi Nestra, turn on
 the kitchen light". Everything else is discarded and not logged.
 After answering, Nestra keeps listening for a follow-up without the wake phrase
 ("and dim the bedroom light", or "bedroom" / "yes" when it asked something);
-"thank you", "that's all" or about 8 seconds of quiet ends the conversation. Keep the tab
+"thank you", "that's all" or about 12 seconds of quiet (counted from when Nestra stops talking) ends the conversation. Keep the tab
 open and in front: browsers pause the mic in background tabs.
 
 ## Sign-in (Firebase Auth)

@@ -418,7 +418,8 @@ def create_app(
             # Ordinary conversation near the mic: drop it, and keep it out of the logs.
             log.info("Wake: %d bytes, no wake phrase (%.2fs)", len(data), heard.seconds)
             return {"ok": False, "woke": False, "reply": "", "transcript_seconds": round(heard.seconds, 2)}
-        log.info("Voice: %d bytes (%s) -> %r in %.2fs", len(data), audio.content_type, heard.text, heard.seconds)
+        mode = "conversation" if conversation else "wake" if wake else "push-to-talk"
+        log.info("Voice (%s): %d bytes -> %r in %.2fs", mode, len(data), heard.text, heard.seconds)
         extra = {"transcript": heard.text, "transcribe_seconds": round(heard.seconds, 2), "woke": woke.heard}
         # "Hi Nestra, turn on the fan" works in push-to-talk too.
         command = woke.command if woke.heard else heard.text

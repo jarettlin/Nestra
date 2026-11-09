@@ -157,29 +157,53 @@ class Speaker {
 
   final _tts = FlutterTts();
   bool _ready = false;
+  bool _speaking = false;
+  Completer<void>? _finished;
 
   /// Mutes spoken replies (remembered while the app is open).
   final muted = ValueNotifier<bool>(false);
 
+  /// Speaks [text] and completes once it has been said.
+  ///
+  /// Finishing is tracked here (the plugin's own "await completion" is
+  /// unreliable in browsers), with a time limit based on the text's length
+  /// so a lost "finished" event can never leave the caller waiting forever.
   Future<void> say(String text) async {
     if (muted.value || text.trim().isEmpty) return;
     try {
       if (!_ready) {
-        await _tts.awaitSpeakCompletion(true); // say() returns once it has finished talking
         await _tts.setLanguage('en-US');
         await _tts.setSpeechRate(kIsWeb ? 1.0 : 0.5);
+        void done() => _finish();
+        _tts.setCompletionHandler(done);
+        _tts.setCancelHandler(done);
+        _tts.setErrorHandler((_) => done());
         _ready = true;
       }
-      await _tts.stop();
+      if (_speaking) await stop();
+      final finished = _finished = Completer<void>();
+      _speaking = true;
       await _tts.speak(text);
+      final limit = Duration(milliseconds: 1500 + 80 * text.length); // ~12 characters a second
+      await finished.future.timeout(limit, onTimeout: () {});
     } catch (e) {
       debugPrint('Text-to-speech failed: $e');
+    } finally {
+      _speaking = false;
     }
+  }
+
+  void _finish() {
+    _speaking = false;
+    final f = _finished;
+    _finished = null;
+    if (f != null && !f.isCompleted) f.complete();
   }
 
   Future<void> stop() async {
     try {
       await _tts.stop();
     } catch (_) {}
+    _finish();
   }
 }
